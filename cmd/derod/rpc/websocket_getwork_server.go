@@ -269,6 +269,9 @@ func newUpgrader() *websocket.Upgrader {
 			sess.rejected++
 			atomic.AddInt64(&CountMinisRejected, 1)
 
+			rate_lock.Lock()
+			defer rate_lock.Unlock()
+
 			// Increase fail count and ban miner in case of 3 invalid PoW's in a row
 			i := ban_list[miner]
 			i.fail_count++
@@ -316,16 +319,21 @@ func onWebsocket(w http.ResponseWriter, r *http.Request) {
 	// Check incoming connections if ban still exists
 	// Ban is active for 15 minutes
 	miner := ParseIPNoError(r.RemoteAddr)
+	rate_lock.Lock()
+
 	for i, t := range ban_list {
 		if miner == i {
 			if time.Now().Sub(t.timestamp) < time.Minute*15 {
 				logger_getwork.V(1).Info("Banned miner", "Address", i, "Info", "Ban still active")
 				conn.Close()
+				break
 			} else {
 				delete(ban_list, i)
+				break
 			}
 		}
 	}
+	rate_lock.Unlock()
 
 	wsConn := conn.(*websocket.Conn)
 
