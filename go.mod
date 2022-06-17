@@ -1,4 +1,4 @@
-module github.com/deroproject/derohe-Hansen33-mod
+module github.com/deroproject/derohe
 
 go 1.17
 
