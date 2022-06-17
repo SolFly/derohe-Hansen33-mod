@@ -188,7 +188,7 @@ func PeerLogConnectionFail(Address string, Block_Type string, Block_ID string, P
 	}
 
 	go Peer_SetFail(Address)
-	go logger.V(1).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
+	go logger.V(2).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
 
 }
 
@@ -235,6 +235,6 @@ func PeerLogReceiveFail(Address string, Block_Type string, Block_ID string, Peer
 		Pstat[Address].Receiving_Errors = append(Pstat[Address].Receiving_Errors, &ConnectionError)
 	}
 	go Peer_SetFail(Address)
-	go logger.V(1).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
+	go logger.V(2).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
 
 }

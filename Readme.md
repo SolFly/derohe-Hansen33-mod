@@ -6,10 +6,20 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
 * Please use with causion, as with all weapons you may or may not hurt your self using this.
 * If all your minis get lost or your computer blows up, it's no my fault, you installed this.
 
+### Developers
+
+ * Hansen33   Address: dero1qy07h9mk6xxf2k4x0ymdpezvksjy0talskhpvqmat3xk3d9wczg5jqqvwl0sn
+ * arodd      Address: dero1qyss8jkqfkvp4vlxfx3l7f9rr7m55ff3q633ag8xemzv0el90m2j2qqy0te2c
+ * mmarcel    Address: dero1qydkj6dznyk5njmzr96hjcr5uj74anqqqv90mg39mtzm4d2dcpwsqqqk6zvve
+
 ### Changes from official release includes
 
  More Options, switches and buttons 
 
+ * Miners list and mining performance stats
+ * Autoban of bad miners
+ * Orphan and mined blocks metrics
+ * Node mining performance metrics (more RPC calls)
  * Change Runtime Config - P2P Turbo, BW_FACTOR, Min Peers and more
  * Change debug level during runtime
  * Diagnostic Check and Troubleshooting Tips - Identify bad actors
@@ -35,13 +45,18 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
  * Threshold to highlight Peers with Block Transmission Success Rate below x
  * Threshold to highlight Peers latency below x threshold
  * Clear peers stats, individual or all
- * Trusted Peers List / Only Connect To Trusted Peers
+ * Trusted Mode -Trusted Peers List / Only Connect To Trusted Peers
  * Quick Connect to Hansen Nodes 
  * ban_above_height - ban all peers over a specific height
  * connect_to_peer <ip:port> (Initialise new connection to peer)
  * Quick Connect to Seed Nodes 
 
 ### Screen Shots
+
+#### Mining and Miners Stats
+
+![Miners](https://dero-node.mysrv.cloud/images/miner_stats.png)
+![Mined Blocks](https://dero-node.mysrv.cloud/images/mined_blocks.png)
 
 #### More Commands
 
@@ -55,20 +70,13 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
 
 #### Peering Stuff
 
-![Trusted Peers](https://dero-node.mysrv.cloud/images/trusted_list.png)
+![Trusted Mode](https://dero-node.mysrv.cloud/images/trusted_mode.png)
 ![Peer Errors](https://dero-node.mysrv.cloud/images/peer_errors.png)
 ![Peer Info](https://dero-node.mysrv.cloud/images/peer_info.png)
 ![Peer List](https://dero-node.mysrv.cloud/images/peer_list.png)
 
-### Developers
-
- * Hansen33 -- Address: dero1qy07h9mk6xxf2k4x0ymdpezvksjy0talskhpvqmat3xk3d9wczg5jqqvwl0sn
- * adrodd -- Address: TBA
- * mmarcel -- Address: dero1qydkj6dznyk5njmzr96hjcr5uj74anqqqv90mg39mtzm4d2dcpwsqqqk6zvve
-
 ### TODO
 
- * Mining Performance Stats
  * More Automation
  * More of the same
  * Send feature requests to hansen33#2541 on Discord

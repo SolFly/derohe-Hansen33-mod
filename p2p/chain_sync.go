@@ -187,7 +187,13 @@ try_again:
 		//pop_count = chain.Load_TOPO_HEIGHT() - response.Start_topoheight
 	}
 
-	if pop_count >= 1 && connection.SyncNode { // peer is claiming his chain is good and we should rewind
+	if pop_count >= 1 { // peer is claiming his chain is good and we should rewind
+
+		if !connection.SyncNode {
+			logger.Info(fmt.Sprintf("Peer: %s - Is NOT a seed node, but asked us to pop %d block(s), ignoring", connection.Addr.String(), pop_count))
+			return
+		}
+
 		globals.BlockPopCount += pop_count
 		connection.logger.V(1).Info("syncing", "pop_count", pop_count)
 
@@ -252,8 +258,6 @@ try_again:
 
 		connection.logger.V(1).Info("rewinded blocks", "pop_count", pop_count)
 		return
-	} else if pop_count >= 1 {
-		logger.Info(fmt.Sprintf("Peer: %s - Is NOT a seed node, but asked us to pop %d block(s), ignoring", connection.Addr.String(), pop_count))
 	}
 
 	// response only 4096 blocks at a time
