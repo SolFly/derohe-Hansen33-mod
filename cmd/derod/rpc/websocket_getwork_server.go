@@ -135,6 +135,7 @@ func CountMiners() int {
 	return miners_count
 }
 
+var CountUniqueMiners int64
 var CountMinisAccepted int64 // total accepted which passed Powtest, chain may still ignore them
 var CountMinisRejected int64 // total rejected // note we are only counting rejected as those which didnot pass Pow test
 var CountMinisOrphaned int64
@@ -173,10 +174,12 @@ func UpdateMinerStats() {
 	client_list_mutex.Lock()
 	defer client_list_mutex.Unlock()
 
-	// reset counter
-	CountMinisOrphaned = 0
+	var unique_miners = make(map[string]int)
+
 	for conn, sess := range client_list {
 		miner_stats_mutex.Lock()
+
+		unique_miners[sess.address.String()]++
 
 		// use address with port for uniqueness - could have more than one miner behind same IP but mining to different addresses
 		i := miner_stats[conn.RemoteAddr().String()]
@@ -185,14 +188,13 @@ func UpdateMinerStats() {
 		i.miniblocks = sess.miniblocks
 		i.rejected = sess.rejected
 
-		_, x := block.MyOrphanBlocks[conn.RemoteAddr().String()]
-		if x {
+		_, found := block.MyOrphanBlocks[conn.RemoteAddr().String()]
+		if found {
 			i.orphaned = uint64(len(block.MyOrphanBlocks[conn.RemoteAddr().String()]))
 		} else {
 			i.orphaned = 0
 		}
 
-		CountMinisOrphaned += int64(i.orphaned)
 		i.address = fmt.Sprintf("%s", sess.address)
 
 		miner_stats[conn.RemoteAddr().String()] = i
@@ -200,6 +202,18 @@ func UpdateMinerStats() {
 		miner_stats_mutex.Unlock()
 	}
 
+	CountUniqueMiners = int64(len(unique_miners))
+
+	// reset counter
+	CountMinisOrphaned = 0
+	miner_stats_mutex.Lock()
+	for miner := range miner_stats {
+		_, found := block.MyOrphanBlocks[miner]
+		if found {
+			CountMinisOrphaned += int64(len(block.MyOrphanBlocks[miner]))
+		}
+	}
+	miner_stats_mutex.Unlock()
 }
 
 func MinerIsConnected(ip_address string) bool {
@@ -246,18 +260,15 @@ func ShowMinerInfo(wallet string) {
 		good_blocks := stat.blocks + stat.miniblocks
 		bad_blocks := stat.rejected + stat.orphaned
 
-		success_rate := "100"
+		success_rate := float64(100)
+
 		if bad_blocks >= 1 {
 
-			if bad_blocks > good_blocks {
-				success_rate = fmt.Sprintf("%.2f%%", 100-float64((float64(good_blocks)/float64(bad_blocks))*100))
-			} else {
-				success_rate = fmt.Sprintf("-%.2f%%", 100-float64((float64(good_blocks)/float64(bad_blocks))*100))
+			success_rate = float64(100 - float64(float64(float64(bad_blocks)/float64(good_blocks)*100)))
 
-			}
 		}
 
-		fmt.Printf("%-32s %-12s %-12d %-12d %-12d %-12d %s\n", ip_address, is_connected, stat.miniblocks, stat.blocks, stat.rejected, stat.orphaned, success_rate)
+		fmt.Printf("%-32s %-12s %-12d %-12d %-12d %-12d %.2f\n", ip_address, is_connected, stat.miniblocks, stat.blocks, stat.rejected, stat.orphaned, success_rate)
 
 	}
 
@@ -317,18 +328,15 @@ func ListMiners() {
 		good_blocks := stat.blocks + stat.miniblocks
 		bad_blocks := stat.rejected + stat.orphaned
 
-		success_rate := "100"
+		success_rate := float64(100)
+
 		if bad_blocks >= 1 {
 
-			if bad_blocks > good_blocks {
-				success_rate = fmt.Sprintf("%.2f%%", 100-float64((float64(good_blocks)/float64(bad_blocks))*100))
-			} else {
-				success_rate = fmt.Sprintf("-%.2f%%", 100-float64((float64(good_blocks)/float64(bad_blocks))*100))
+			success_rate = float64(100 - float64(float64(float64(bad_blocks)/float64(good_blocks)*100)))
 
-			}
 		}
 
-		fmt.Printf("%-72s %-10s %-12s %-12d %-12d %-12d %-12d %s\n", wallet, stat.is_connected, miners_connected_str, stat.miniblocks, stat.blocks, stat.rejected, stat.orphaned, success_rate)
+		fmt.Printf("%-72s %-10s %-12s %-12d %-12d %-12d %-12d %.2f\n", wallet, stat.is_connected, miners_connected_str, stat.miniblocks, stat.blocks, stat.rejected, stat.orphaned, success_rate)
 
 	}
 

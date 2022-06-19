@@ -96,6 +96,20 @@ func load_peer_list() {
 
 }
 
+// this function return peer count which have successful handshake
+func Peer_Count_Whitelist() (Count uint64) {
+	peer_mutex.Lock()
+	defer peer_mutex.Unlock()
+	for _, p := range peer_map {
+		if p.Whitelist { // only display white listed peer
+			// whitelisted = "yes"
+			Count++
+		}
+	}
+
+	return
+}
+
 //save peer list to disk
 func save_peer_list() {
 

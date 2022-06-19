@@ -140,7 +140,7 @@ var Testnet = CHAIN_CONFIG{Name: "testnet", // testnet will always have last 3 b
 // mainnet has a remote daemon node, which can be used be default, if user provides a  --remote flag
 const REMOTE_DAEMON = "https://dero-node.mysrv.cloud" // "https://rwallet.dero.live"
 
-var WhitelistIncoming bool = true
+var WhitelistIncoming bool = false
 var LogLevel int8 = 0
 var OperatorName string = "Hansen33"
 var P2PTurbo bool = true

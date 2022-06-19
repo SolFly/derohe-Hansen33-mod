@@ -6,16 +6,26 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
 * Please use with causion, as with all weapons you may or may not hurt your self using this.
 * If all your minis get lost or your computer blows up, it's no my fault, you installed this.
 
+
+* This modded DERO version is running and providing live stats for on the nodes below
+  * UK Node - https://dero-node.mysrv.cloud
+  * US Node - https://dero-node-us.mysrv.cloud 
+
 ### Developers
 
- * Hansen33   Address: dero1qy07h9mk6xxf2k4x0ymdpezvksjy0talskhpvqmat3xk3d9wczg5jqqvwl0sn
- * arodd      Address: dero1qyss8jkqfkvp4vlxfx3l7f9rr7m55ff3q633ag8xemzv0el90m2j2qqy0te2c
- * mmarcel    Address: dero1qydkj6dznyk5njmzr96hjcr5uj74anqqqv90mg39mtzm4d2dcpwsqqqk6zvve
+ * @Hansen333
+   * Address: dero1qy07h9mk6xxf2k4x0ymdpezvksjy0talskhpvqmat3xk3d9wczg5jqqvwl0sn
+ * @arodd
+   * Address: dero1qyss8jkqfkvp4vlxfx3l7f9rr7m55ff3q633ag8xemzv0el90m2j2qqy0te2c
+ * @mmarcel
+   * Address: dero1qydkj6dznyk5njmzr96hjcr5uj74anqqqv90mg39mtzm4d2dcpwsqqqk6zvve
 
 ### Changes from official release includes
 
  More Options, switches and buttons 
 
+ * AddressToName - command to look up names inside derod (using HarkerK code)
+ * Allow more than 31 incoming peers (will use max_peer option as limit)
  * Miners list and mining performance stats
  * Autoban of bad miners
  * Orphan and mined blocks metrics

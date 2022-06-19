@@ -105,8 +105,11 @@ func GetInfo(ctx context.Context) (result rpc.GetInfo_Result, err error) {
 	result.Miners = CountMiners()
 	result.Miniblocks_In_Memory = chain.MiniBlocks.Count()
 
-	orphans, blocks, loss_rate := block.BlockRateCount()
+	result.SameHeightChainExtendedCount = blockchain.GetSameHeightChainExtendedCount(chain)
 
+	orphans, blocks, loss_rate, orphan_100 := block.BlockRateCount(result.OurHeight)
+
+	result.NetworkBlockRateOrphan100 = float64(float64(float64(orphan_100)/900) * 100)
 	result.NetworkBlockRateOrphan = orphans
 	result.NetworkBlockRateMined = blocks
 	result.OrphanBlockRate = loss_rate
@@ -120,7 +123,7 @@ func GetInfo(ctx context.Context) (result rpc.GetInfo_Result, err error) {
 
 	result.MintingSuccessRate = float64(100)
 	if result.CountMinisOrphaned >= 1 {
-		result.MintingSuccessRate = float64(float64(blocksMinted/result.CountMinisOrphaned) * 100)
+		result.MintingSuccessRate = float64(100 - float64(float64(result.CountMinisOrphaned/blocksMinted)*100))
 	}
 
 	result.Minting_Velocity_1hr = float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600

@@ -317,12 +317,14 @@ type (
 		PeerLatency                int64   `json:"peer_latency"`
 		Version                    string  `json:"version"`
 
-		Miners                 int     `json:"connected_miners"`
-		Miniblocks_In_Memory   int     `json:"miniblocks_in_memory"`
-		NetworkBlockRateOrphan int     `json:"network_orphan_10min"`
-		NetworkBlockRateMined  int     `json:"network_blocks_10min"`
-		OrphanBlockRate        float64 `json:"network_orphan_rate_10min"`
-		RemotePopBlockCount    int64   `json:"remote_pop_block_count"`
+		Miners                       int     `json:"connected_miners"`
+		Miniblocks_In_Memory         int     `json:"miniblocks_in_memory"`
+		NetworkBlockRateOrphan       int     `json:"network_orphan_10min"`
+		NetworkBlockRateOrphan100    float64 `json:"network_orphan_100"`
+		NetworkBlockRateMined        int     `json:"network_miniblocks_10min"`
+		OrphanBlockRate              float64 `json:"network_orphan_miniblock_rate_10min"`
+		RemotePopBlockCount          int64   `json:"remote_pop_block_count"`
+		SameHeightChainExtendedCount int     `json:"same_height_chain_extended_count"`
 
 		CountBlocks           int64   `json:"blocks_count"`
 		CountMinisAccepted    int64   `json:"miniblocks_accepted_count"`

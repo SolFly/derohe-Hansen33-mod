@@ -140,7 +140,12 @@ func Connection_Delete(c *Connection) {
 	})
 }
 
+var last_peer_drop_time = time.Now().Unix()
+
 func Connection_Pending_Clear() {
+
+	var dropped_peers = make(map[string]int)
+
 	connection_map.Range(func(k, value interface{}) bool {
 		v := value.(*Connection)
 		if atomic.LoadUint32(&v.State) == HANDSHAKE_PENDING && time.Now().Sub(v.Created) > 10*time.Second { //and skip ourselves
@@ -148,10 +153,18 @@ func Connection_Pending_Clear() {
 			v.logger.V(3).Info("Cleaning pending connection")
 		}
 
-		if time.Now().Sub(v.update_received).Round(time.Second).Seconds() > 20 {
+		if time.Now().Sub(v.update_received).Round(time.Second).Seconds() > 20 && len(dropped_peers) < 10 && last_peer_drop_time+120 < time.Now().Unix() {
+
 			v.exit()
 			Connection_Delete(v)
-			v.logger.V(1).Info("Purging connection due since idle")
+			v.logger.V(1).Info(fmt.Sprintf("Purging connection (%s) due since idle for %s", v.Addr.String(), time.Now().Sub(v.update_received).Round(time.Second).String()))
+
+			//Rate limit the peer drops so we don't drop all peers at once
+			dropped_peers[v.Addr.String()]++
+			if len(dropped_peers) >= 10 {
+				logger.Info("Peer Drop Rate Limit (10) Reached - waiting 120 sec before dropping any more peers")
+				last_peer_drop_time = time.Now().Unix()
+			}
 		}
 
 		if IsAddressInBanList(Address(v)) {
@@ -362,19 +375,6 @@ func Peer_Count() (Count uint64) {
 		}
 		return true
 	})
-	return
-}
-
-// this function return peer count which have successful handshake
-func Peer_Count_Whitelist() (Count uint64) {
-
-	for _, p := range peer_map {
-		if p.Whitelist { // only display white listed peer
-			// whitelisted = "yes"
-			Count++
-		}
-	}
-
 	return
 }
 

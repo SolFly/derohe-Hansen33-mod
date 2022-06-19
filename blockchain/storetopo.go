@@ -16,14 +16,16 @@
 
 package blockchain
 
-import "os"
-import "fmt"
-import "math"
-import "path/filepath"
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
 
-import "github.com/deroproject/derohe/config"
-import "github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/config"
+	"github.com/deroproject/derohe/cryptography/crypto"
+)
 
 type TopoRecord struct {
 	BLOCK_ID      [32]byte
@@ -70,7 +72,7 @@ func (s *storetopofs) Read(index int64) (TopoRecord, error) {
 	var buf [TOPORECORD_SIZE]byte
 	var record TopoRecord
 
-	if n, err := s.topomapping.ReadAt(buf[:], index*TOPORECORD_SIZE); int64(n) != TOPORECORD_SIZE {
+	if n, err := s.topomapping.ReadAt(buf[:], index*TOPORECORD_SIZE); int64(n) != TOPORECORD_SIZE || err != nil {
 		return record, err
 	}
 	copy(record.BLOCK_ID[:], buf[:])
