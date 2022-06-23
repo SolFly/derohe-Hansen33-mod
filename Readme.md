@@ -23,7 +23,7 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
 ### Changes from official release includes
 
  More Options, switches and buttons 
-
+ 
  * AddressToName - command to look up names inside derod (using HarkerK code)
  * Allow more than 31 incoming peers (will use max_peer option as limit)
  * Miners list and mining performance stats

@@ -61,7 +61,6 @@ var ClockOffsetP2P time.Duration // clockoffset in reference to p2p averging
 var TimeIsInSync bool            // whether time is in sync, if yes we do not use any clock offset but still we keep calculating them
 var TimeIsInSyncNTP bool
 var NetworkTurtle bool = true
-var ErrorLogExpirySeconds int64 = 600
 
 var DiagnocticCheckRunning bool = false
 var NextDiagnocticCheck int64 = time.Now().Unix() + 15
@@ -175,7 +174,7 @@ func InitializeLog(console, logfile io.Writer) {
 
 	if Arguments["--debug"] != nil && Arguments["--debug"].(bool) == true { // setup debug mode if requested
 		Log_Level_Console = zap.NewAtomicLevelAt(zapcore.Level(-1))
-		config.LogLevel = 1
+		config.RunningConfig.LogLevel = 1
 	}
 
 	if Arguments["--clog-level"] != nil { // setup log level if requested
@@ -187,7 +186,7 @@ func InitializeLog(console, logfile io.Writer) {
 		if log_level > 127 {
 			log_level = 127
 		}
-		config.LogLevel = log_level
+		config.RunningConfig.LogLevel = log_level
 		Log_Level_Console = zap.NewAtomicLevelAt(zapcore.Level(0 - log_level))
 	}
 

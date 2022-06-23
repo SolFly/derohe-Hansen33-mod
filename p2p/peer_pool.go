@@ -188,7 +188,7 @@ func Peer_Add(p *Peer) {
 	}
 
 	// trusted only if enabled
-	if config.OnlyTrusted {
+	if config.RunningConfig.OnlyTrusted {
 
 		// First make sure we remove all untrusted connections
 		for _, conn := range UniqueConnections() {
@@ -240,18 +240,18 @@ func PrintBlockErrors() {
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
-	fmt.Printf("\nPeer Block Distribution - Errors Log\n")
+	fmt.Printf("\nPeer Block Distribution - Errors Log (last %s)\n", time.Duration(config.RunningConfig.ErrorLogExpirySeconds*int64(time.Second)).Round(time.Second))
 
-	fmt.Printf("\n%-16s %-22s %-32s %-8s %-22s\n", "Remote Addr", "Peer ID", "Errors (Receiving / Sending)", "BTS", "Lastest Error")
+	fmt.Printf("\n%-16s %-32s %-8s %-22s\n", "Remote Addr", "Errors (Receiving / Sending)", "BTS", "Lastest Error")
 	error_count := 0
 	peer_count := 0
-	for _, stat := range Pstat {
+	for Address, stat := range Pstat {
 
 		var success_rate float64 = 100
-		_, ps := BlockInsertCount[stat.Address]
+		_, ps := BlockInsertCount[Address]
 		if ps {
-			total := (BlockInsertCount[stat.Address].Blocks_Accepted + BlockInsertCount[stat.Address].Blocks_Rejected)
-			success_rate = float64(float64(float64(BlockInsertCount[stat.Address].Blocks_Accepted) / float64(total) * 100))
+			total := (BlockInsertCount[Address].Blocks_Accepted + BlockInsertCount[Address].Blocks_Rejected)
+			success_rate = float64(float64(float64(BlockInsertCount[Address].Blocks_Accepted) / float64(total) * 100))
 		}
 
 		errors_text := fmt.Sprintf("%d/%d Collisions: %d", len(stat.Receiving_Errors), len(stat.Sending_Errors), len(stat.Collision_Errors))
@@ -270,66 +270,57 @@ func PrintBlockErrors() {
 				latest_error = stat.Receiving_Errors[len(stat.Receiving_Errors)-1].When
 			}
 		}
-		fmt.Printf("%-16s %-22d %-32s %-8.2f %-10s\n", stat.Address, stat.Peer_ID, errors_text, success_rate, latest_error.Format(time.RFC1123))
+		fmt.Printf("%-16s %-32s %-8.2f %-10s\n", Address, errors_text, success_rate, latest_error.Format(time.RFC1123))
 
 		peer_count++
 		error_count += len(stat.Sending_Errors) + len(stat.Receiving_Errors)
 	}
 
-	fmt.Printf("\nLogged %d error(s) for %d peer(s)\n", error_count, peer_count)
+	fmt.Printf("\nLogged %d error(s) for %d peer(s)\n", error_count, len(Pstat))
 	fmt.Print("Type: peer_error <IP>       - to see connection errors\n\n")
 
 }
 
 func PrintPeerErrors(Address string) {
 
-	Stats_mutex.Lock()
-	defer Stats_mutex.Unlock()
-
 	Address = ParseIPNoError(Address)
 
-	fmt.Printf("\nPeer Block Distribution - Errors Log\n")
+	fmt.Printf("\nPeer Block Distribution - Errors Log (last %s)\n", time.Duration(config.RunningConfig.ErrorLogExpirySeconds*int64(time.Second)).Round(time.Second))
 
 	if len(Address) <= 0 {
 		return
 	}
 
-	_, ps := BlockInsertCount[Address]
-	if ps {
-		total := (BlockInsertCount[Address].Blocks_Accepted + BlockInsertCount[Address].Blocks_Rejected)
-		success_rate := float64(float64(float64(BlockInsertCount[Address].Blocks_Accepted) / float64(total) * 100))
-		fmt.Printf("Block Transmission Success: %d Accepted / %d Rejected - %.2f%%", BlockInsertCount[Address].Blocks_Accepted, BlockInsertCount[Address].Blocks_Rejected, success_rate)
-	}
+	AcceptedCount, RejectedCount, _, SuccessRate := GetPeerBTS(Address)
 
-	for _, stat := range Pstat {
+	Stats_mutex.Lock()
+	defer Stats_mutex.Unlock()
 
-		if Address != stat.Address {
-			continue
-		}
-
+	stat, x := Pstat[Address]
+	if x {
 		if len(stat.Collision_Errors) >= 1 {
 			fmt.Print("\nCollision(s):\n")
 			for _, error := range stat.Collision_Errors {
-				fmt.Printf("*  %-32s %-32s %-32s %s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message, error.Block_ID)
+				fmt.Printf("*  %-32s %-32s %-32s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message)
 			}
 		}
 
 		if len(stat.Receiving_Errors) >= 1 {
 			fmt.Print("\nReceiving:\n")
 			for _, error := range stat.Receiving_Errors {
-				fmt.Printf("*  %-32s %-32s %-32s %s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message, error.Block_ID)
+				fmt.Printf("*  %-32s %-32s %-32s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message)
 			}
 		}
 
 		if len(stat.Sending_Errors) >= 1 {
 			fmt.Print("\nSending:\n")
 			for _, error := range stat.Sending_Errors {
-				fmt.Printf("*  %-32s %-32s %-32s %s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message, error.Block_ID)
+				fmt.Printf("*  %-32s %-32s %-32s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message)
 			}
 		}
 
 		fmt.Printf("\nLogged %d error(s) for IN (%d) - OUT (%d)\n", (len(stat.Sending_Errors) + len(stat.Receiving_Errors)), len(stat.Receiving_Errors), len(stat.Sending_Errors))
-
+		fmt.Printf("Block Transmission Success Rate: %d Accepted / %d Rejected - %.2f%%\n\n", AcceptedCount, RejectedCount, SuccessRate)
 	}
 
 }
@@ -382,41 +373,27 @@ func Print_Peer_Info(Address string) {
 	}
 	fmt.Printf("\n")
 
-	_, BlockLogs := BlockInsertCount[Address]
-	if BlockLogs {
-
-		total := (BlockInsertCount[Address].Blocks_Accepted + BlockInsertCount[Address].Blocks_Rejected)
-		success_rate := float64(float64(float64(BlockInsertCount[Address].Blocks_Accepted) / float64(total) * 100))
-
-		fmt.Printf("Block Transmission Success Rate: %d Accepted / %d Rejected - %.2f%%\n\n", BlockInsertCount[Address].Blocks_Accepted, BlockInsertCount[Address].Blocks_Rejected,
-			float64(success_rate))
-	}
+	AcceptedCount, RejectedCount, _, SuccessRate := GetPeerBTS(Address)
 
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
-	for _, stat := range Pstat {
-
-		if Address != stat.Address {
-			continue
-		}
-
-		var latest_sent_error time.Time
-		if len(stat.Sending_Errors) >= 1 {
-			latest_sent_error = stat.Sending_Errors[len(stat.Sending_Errors)-1].When
-		}
-
-		var latest_recv_error time.Time
-		if len(stat.Receiving_Errors) >= 1 {
-			latest_recv_error = stat.Sending_Errors[len(stat.Receiving_Errors)-1].When
-		}
-
-		fmt.Printf("Error Log:\n\t%-20s %-8d Last Error: %s\n\t%-20s %-8dLast Error: %s\n", "Sending Error(s)", len(stat.Sending_Errors), latest_sent_error.Format(time.RFC1123), "Receiving Error(s)", len(stat.Receiving_Errors), latest_recv_error.Format(time.RFC1123))
-
-		fmt.Printf("\nLogged %d error(s) - IN (%d) - OUT (%d)\n", (len(stat.Sending_Errors) + len(stat.Receiving_Errors)), len(stat.Receiving_Errors), len(stat.Sending_Errors))
-
+	peer := Pstat[Address]
+	var latest_sent_error time.Time
+	if len(peer.Sending_Errors) >= 1 {
+		latest_sent_error = peer.Sending_Errors[len(peer.Sending_Errors)-1].When
 	}
-	fmt.Printf("\n")
+
+	var latest_recv_error time.Time
+	if len(peer.Receiving_Errors) >= 1 {
+		latest_recv_error = peer.Sending_Errors[len(peer.Receiving_Errors)-1].When
+	}
+
+	fmt.Printf("Error Log:\n\t%-20s %-8d Last Error: %s\n\t%-20s %-8dLast Error: %s\n", "Sending Error(s)", len(peer.Sending_Errors), latest_sent_error.Format(time.RFC1123), "Receiving Error(s)", len(peer.Receiving_Errors), latest_recv_error.Format(time.RFC1123))
+
+	fmt.Printf("\nLogged %d error(s) - IN (%d) - OUT (%d)\n", (len(peer.Sending_Errors) + len(peer.Receiving_Errors)), len(peer.Receiving_Errors), len(peer.Sending_Errors))
+	fmt.Printf("Block Transmission Success Rate: %d Accepted / %d Rejected - %.2f%%\n\n", AcceptedCount, RejectedCount, SuccessRate)
+
 }
 
 func Peer_Whitelist_Counts() (Count uint64) {
@@ -440,46 +417,8 @@ func Peer_SetFail(address string) {
 	peer_mutex.Lock()
 	defer peer_mutex.Unlock()
 
-	Stats_mutex.Lock()
-	defer Stats_mutex.Unlock()
+	p.FailCount++ //  increase fail count, and mark for delayed connect
 
-	// Clean up our stats
-	for _, ps := range Pstat {
-		var NewSendingErrors []*BlockSendingError
-		for _, se := range ps.Sending_Errors {
-			expiry := se.When.Add(time.Duration(globals.ErrorLogExpirySeconds) * time.Second)
-			if time.Now().Before(expiry) {
-				NewSendingErrors = append(NewSendingErrors, se)
-			}
-			ps.Sending_Errors = NewSendingErrors
-		}
-
-		var NewReceiving_Errors []*BlockReceivingError
-		for _, re := range ps.Receiving_Errors {
-			expiry := re.When.Add(time.Duration(globals.ErrorLogExpirySeconds) * time.Second)
-			if time.Now().Before(expiry) {
-				NewReceiving_Errors = append(NewReceiving_Errors, re)
-			}
-			ps.Receiving_Errors = NewReceiving_Errors
-		}
-
-		var NewCollision_Errors []*BlockCollisionError
-		for _, re := range ps.Collision_Errors {
-			expiry := re.When.Add(time.Duration(globals.ErrorLogExpirySeconds) * time.Second)
-			if time.Now().Before(expiry) {
-				NewCollision_Errors = append(NewCollision_Errors, re)
-			}
-			ps.Collision_Errors = NewCollision_Errors
-		}
-
-	}
-
-	ps, exists := Pstat[ParseIPNoError(address)]
-	if exists {
-		p.FailCount = uint64(len(ps.Sending_Errors) + len(ps.Receiving_Errors))
-	} else {
-		p.FailCount++ //  increase fail count, and mark for delayed connect
-	}
 	p.ConnectAfter = uint64(time.Now().UTC().Unix()) + 1<<(p.FailCount-1)
 }
 

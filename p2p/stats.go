@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/deroproject/derohe/config"
 )
 
 type BlockInsertCounter struct {
@@ -13,46 +15,36 @@ type BlockInsertCounter struct {
 }
 
 type BlockSendingError struct {
-	Block_ID            string
 	Block_Type          string
 	When                time.Time
 	Error_Message       string
 	Destination_Peer_ID uint64
-	Address             string
 }
 
 type BlockReceivingError struct {
-	Block_ID      string
 	Block_Type    string
 	When          time.Time
 	Error_Message string
 	From_Peer_ID  uint64
-	Address       string
 }
 
 type BlockCollisionError struct {
-	Block_ID      string
 	Block_Type    string
 	When          time.Time
 	Error_Message string
 	Peer_ID       uint64
-	Address       string
 	Incoming      bool
 }
 
 type PeerStats struct {
-	Peer_ID          uint64
-	Address          string
-	Sending_Errors   []*BlockSendingError
-	Receiving_Errors []*BlockReceivingError
-	Collision_Errors []*BlockCollisionError
+	Sending_Errors   []BlockSendingError
+	Receiving_Errors []BlockReceivingError
+	Collision_Errors []BlockCollisionError
 }
 
-var Pstat = map[string]*PeerStats{}
-
 var Stats_mutex sync.Mutex
-
-var BlockInsertCount = map[string]*BlockInsertCounter{}
+var Pstat = make(map[string]PeerStats)
+var BlockInsertCount = make(map[string]BlockInsertCounter)
 
 func LogAccept(Address string) {
 
@@ -61,14 +53,9 @@ func LogAccept(Address string) {
 
 	Address = ParseIPNoError(Address)
 
-	_, stat := BlockInsertCount[Address]
-	if !stat {
-		var NewMetric BlockInsertCounter
-		NewMetric.Blocks_Accepted++
-		BlockInsertCount[Address] = &NewMetric
-	} else {
-		BlockInsertCount[Address].Blocks_Accepted++
-	}
+	stat := BlockInsertCount[Address]
+	stat.Blocks_Accepted++
+	BlockInsertCount[Address] = stat
 
 }
 
@@ -79,15 +66,9 @@ func LogReject(Address string) {
 
 	Address = ParseIPNoError(Address)
 
-	_, stat := BlockInsertCount[Address]
-	if !stat {
-		var NewMetric BlockInsertCounter
-		NewMetric.Blocks_Rejected++
-		BlockInsertCount[Address] = &NewMetric
-	} else {
-		BlockInsertCount[Address].Blocks_Rejected++
-
-	}
+	stat := BlockInsertCount[Address]
+	stat.Blocks_Rejected++
+	BlockInsertCount[Address] = stat
 
 }
 
@@ -104,12 +85,16 @@ func ClearAllStats() {
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
-	var newPstat = map[string]*PeerStats{}
-	Pstat = newPstat
+	for Address, _ := range Pstat {
+		var new_peer_stat PeerStats
+		Pstat[Address] = new_peer_stat
+	}
 
-	for _, counter := range BlockInsertCount {
-		counter.Blocks_Accepted = 0
-		counter.Blocks_Rejected = 0
+	for Address := range BlockInsertCount {
+		stat := BlockInsertCount[Address]
+		stat.Blocks_Accepted = 0
+		stat.Blocks_Rejected = 0
+		BlockInsertCount[Address] = stat
 	}
 }
 
@@ -130,111 +115,182 @@ func ClearPeerStats(Address string) {
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
-	for _, p := range Pstat {
-		if Address == p.Address {
-			var peer_stats PeerStats
-			peer_stats.Address = Address
-			Pstat[Address] = &peer_stats
-		}
+	_, x := Pstat[Address]
+	if x {
+		var new_peer_stat PeerStats
+		Pstat[Address] = new_peer_stat
 	}
 
-	for key, p := range BlockInsertCount {
-		if Address == key {
-			p.Blocks_Accepted = 0
-			p.Blocks_Rejected = 0
-		}
+	stat, y := BlockInsertCount[Address]
+	if y {
+		stat.Blocks_Accepted = 0
+		stat.Blocks_Rejected = 0
+		BlockInsertCount[Address] = stat
 	}
 }
 
-func PeerLogConnectionFail(Address string, Block_Type string, Block_ID string, PeerID uint64, Message string) {
+func PeerLogConnectionFail(Address string, Block_Type string, PeerID uint64, Message string) {
 
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
 	Address = ParseIPNoError(Address)
-	// Create stats object if not already exists
-	// Create stats object if not already exists
-	_, stat_exists := Pstat[Address]
-	if !stat_exists {
-		var peer_stats PeerStats
-		peer_stats.Peer_ID = PeerID
-		peer_stats.Address = Address
-		Pstat[Address] = &peer_stats
-	}
+
+	peer := Pstat[Address]
 
 	is_collision := regexp.MustCompile("^collision ")
 	is_tip_issue := regexp.MustCompile("^tip could not be expanded")
 
 	if is_collision.Match([]byte(Message)) || is_tip_issue.Match([]byte(Message)) {
-		var CollisionError BlockCollisionError
-		CollisionError.Block_ID = Block_ID
-		CollisionError.Block_Type = Block_Type
-		CollisionError.Address = Address
-		CollisionError.When = time.Now()
-		CollisionError.Error_Message = Message
-		CollisionError.Incoming = false
-		Pstat[Address].Collision_Errors = append(Pstat[Address].Collision_Errors, &CollisionError)
+
+		stat := peer.Collision_Errors
+
+		var Error BlockCollisionError
+		Error.Block_Type = Block_Type
+		Error.When = time.Now()
+		Error.Error_Message = Message
+		Error.Incoming = false
+		Error.Peer_ID = PeerID
+
+		stat = append(stat, Error)
+
+		peer.Collision_Errors = stat
 
 	} else {
 		// Log error
-		var ConnectionError BlockSendingError
-		ConnectionError.Block_ID = Block_ID
-		ConnectionError.Block_Type = Block_Type
-		ConnectionError.Address = Address
-		ConnectionError.When = time.Now()
-		ConnectionError.Error_Message = Message
-		ConnectionError.Destination_Peer_ID = PeerID
-		Pstat[Address].Sending_Errors = append(Pstat[Address].Sending_Errors, &ConnectionError)
+
+		stat := peer.Sending_Errors
+
+		var Error BlockSendingError
+		Error.Block_Type = Block_Type
+		Error.When = time.Now()
+		Error.Error_Message = Message
+		Error.Destination_Peer_ID = PeerID
+
+		stat = append(stat, Error)
+
+		peer.Sending_Errors = stat
 	}
+
+	Pstat[Address] = peer
+	go Peer_SetFail(Address)
+	go logger.V(2).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
+
+}
+
+func PeerLogReceiveFail(Address string, Block_Type string, PeerID uint64, Message string) {
+
+	Stats_mutex.Lock()
+	defer Stats_mutex.Unlock()
+
+	Address = ParseIPNoError(Address)
+
+	peer := Pstat[Address]
+
+	is_collision := regexp.MustCompile("^collision ")
+	is_tip_issue := regexp.MustCompile("^tip could not be expanded")
+
+	if is_collision.Match([]byte(Message)) || is_tip_issue.Match([]byte(Message)) {
+
+		stat := peer.Collision_Errors
+
+		var Error BlockCollisionError
+		Error.Block_Type = Block_Type
+		Error.When = time.Now()
+		Error.Error_Message = Message
+		Error.Incoming = true
+		Error.Peer_ID = PeerID
+
+		stat = append(stat, Error)
+
+		peer.Collision_Errors = stat
+
+	} else {
+		// Log error
+		stat := peer.Receiving_Errors
+
+		var Error BlockReceivingError
+		Error.Block_Type = Block_Type
+		Error.When = time.Now()
+		Error.Error_Message = Message
+		Error.From_Peer_ID = PeerID
+
+		stat = append(stat, Error)
+
+		peer.Receiving_Errors = stat
+	}
+	Pstat[Address] = peer
 
 	go Peer_SetFail(Address)
 	go logger.V(2).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
 
 }
 
-func PeerLogReceiveFail(Address string, Block_Type string, Block_ID string, PeerID uint64, Message string) {
+func GetPeerBTS(Address string) (Accepted uint64, Rejected uint64, Total uint64, SuccessRate float64) {
 
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
 
 	Address = ParseIPNoError(Address)
-	// Create stats object if not already exists
-	// Create stats object if not already exists
-	_, stat_exists := Pstat[Address]
-	if !stat_exists {
-		var peer_stats PeerStats
-		peer_stats.Peer_ID = PeerID
-		peer_stats.Address = Address
-		Pstat[Address] = &peer_stats
+
+	stat, ps := BlockInsertCount[Address]
+	if ps {
+
+		total := float64(stat.Blocks_Accepted + stat.Blocks_Rejected)
+		SuccessRate = (float64(stat.Blocks_Accepted) / total) * 100
+
+		return stat.Blocks_Accepted, stat.Blocks_Rejected, (stat.Blocks_Accepted + stat.Blocks_Rejected), SuccessRate
 	}
 
-	is_collision := regexp.MustCompile("^collision ")
-	is_tip_issue := regexp.MustCompile("^tip could not be expanded")
+	return Accepted, Rejected, Total, SuccessRate
+}
 
-	if is_collision.Match([]byte(Message)) || is_tip_issue.Match([]byte(Message)) {
-		var CollisionError BlockCollisionError
+func ClearPeerLogsCron() {
 
-		CollisionError.Block_ID = Block_ID
-		CollisionError.Block_Type = Block_Type
-		CollisionError.Address = Address
-		CollisionError.When = time.Now()
-		CollisionError.Error_Message = Message
-		CollisionError.Incoming = true
-		Pstat[Address].Collision_Errors = append(Pstat[Address].Collision_Errors, &CollisionError)
+	Stats_mutex.Lock()
+	defer Stats_mutex.Unlock()
 
-	} else {
-		// Log error
-		var ConnectionError BlockReceivingError
+	cleared_counter := 0
+	for peer, stat := range Pstat {
 
-		ConnectionError.Block_ID = Block_ID
-		ConnectionError.Block_Type = Block_Type
-		ConnectionError.Address = Address
-		ConnectionError.When = time.Now()
-		ConnectionError.Error_Message = Message
-		ConnectionError.From_Peer_ID = PeerID
-		Pstat[Address].Receiving_Errors = append(Pstat[Address].Receiving_Errors, &ConnectionError)
+		var Sending_Errors []BlockSendingError
+		var Receiving_Errors []BlockReceivingError
+		var Collision_Errors []BlockCollisionError
+
+		for _, log := range stat.Sending_Errors {
+			if log.When.Unix()+config.RunningConfig.ErrorLogExpirySeconds > time.Now().Unix() {
+				Sending_Errors = append(Sending_Errors, log)
+			} else {
+				cleared_counter++
+			}
+		}
+
+		for _, log := range stat.Receiving_Errors {
+			if log.When.Unix()+config.RunningConfig.ErrorLogExpirySeconds > time.Now().Unix() {
+				Receiving_Errors = append(Receiving_Errors, log)
+			} else {
+				cleared_counter++
+			}
+		}
+
+		for _, log := range stat.Collision_Errors {
+			if log.When.Unix()+config.RunningConfig.ErrorLogExpirySeconds > time.Now().Unix() {
+				Collision_Errors = append(Collision_Errors, log)
+			} else {
+				cleared_counter++
+			}
+		}
+
+		stat.Sending_Errors = Sending_Errors
+		stat.Receiving_Errors = Receiving_Errors
+		stat.Collision_Errors = Collision_Errors
+
+		if len(stat.Sending_Errors) == 0 && len(stat.Receiving_Errors) == 0 && len(stat.Collision_Errors) == 0 {
+			delete(Pstat, peer)
+		} else {
+			Pstat[peer] = stat
+		}
 	}
-	go Peer_SetFail(Address)
-	go logger.V(2).Info(fmt.Sprintf("Error (%s) - Logged for Connection: %s", Message, Address))
 
+	logger.V(2).Info(fmt.Sprintf("Cleared (%d) peer logs", cleared_counter))
 }

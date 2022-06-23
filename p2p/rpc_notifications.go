@@ -187,7 +187,7 @@ func (c *Connection) NotifyMiniBlock(request Objects, response *Dummy) (err erro
 		}
 
 		if err, ok = chain.InsertMiniBlock(mbl); !ok {
-			go PeerLogReceiveFail(c.Addr.String(), "InsertMiniBlock", mbl.GetHash().String(), c.Peer_ID, err.Error())
+			go PeerLogReceiveFail(c.Addr.String(), "InsertMiniBlock", c.Peer_ID, err.Error())
 			// this happens all the time?
 			go LogReject(c.Addr.String())
 			return err
@@ -249,10 +249,11 @@ func (c *Connection) processChunkedBlock(request Objects, data_shard_count, pari
 	// check if we can add ourselves to chain
 	if err, ok := chain.Add_Complete_Block(&cbl); ok { // if block addition was successfil
 		// notify all peers
-		go LogAccept(c.Addr.String())
 		Broadcast_Block(&cbl, c.Peer_ID) // do not send back to the original peer
+		go LogAccept(c.Addr.String())
+
 	} else { // ban the peer for sometime
-		go PeerLogReceiveFail(c.Addr.String(), "InsertMiniBlock", bl.GetHash().String(), c.Peer_ID, err.Error())
+		go PeerLogReceiveFail(c.Addr.String(), "InsertMiniBlock", c.Peer_ID, err.Error())
 		go LogReject(c.Addr.String())
 		if err == errormsg.ErrInvalidPoW {
 			c.logger.Error(err, "This peer should be banned and terminated")

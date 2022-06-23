@@ -140,13 +140,32 @@ var Testnet = CHAIN_CONFIG{Name: "testnet", // testnet will always have last 3 b
 // mainnet has a remote daemon node, which can be used be default, if user provides a  --remote flag
 const REMOTE_DAEMON = "https://dero-node.mysrv.cloud" // "https://rwallet.dero.live"
 
-var WhitelistIncoming bool = false
-var LogLevel int8 = 0
-var OperatorName string = "Hansen33"
-var P2PTurbo bool = true
-var P2PBWFactor int64 = 2
-var GETWorkJobDispatchTime time.Duration
-var DiagnosticCheckDelay int64 = 3600
-var BlockRejectThreshold int64 = 80
-var PeerLatencyThreshold = time.Duration(2000 * time.Millisecond)
-var OnlyTrusted bool = false
+type RUN_CONFIG struct {
+	WhitelistIncoming      bool
+	LogLevel               int8
+	OperatorName           string
+	P2PTurbo               bool
+	P2PBWFactor            int64
+	GETWorkJobDispatchTime time.Duration
+	DiagnosticCheckDelay   int64
+	BlockRejectThreshold   int64
+	PeerLatencyThreshold   time.Duration
+	OnlyTrusted            bool
+	Min_Peers              int64
+	Max_Peers              int64
+	BlockedVersions        []string
+	ErrorLogExpirySeconds  int64
+}
+
+var RunningConfig = RUN_CONFIG{
+	WhitelistIncoming:     false,
+	LogLevel:              0,
+	OperatorName:          "Hansen33",
+	P2PTurbo:              true,
+	P2PBWFactor:           2,
+	DiagnosticCheckDelay:  3600,
+	BlockRejectThreshold:  80,
+	PeerLatencyThreshold:  time.Duration(2000 * time.Millisecond),
+	OnlyTrusted:           false,
+	ErrorLogExpirySeconds: 600,
+}

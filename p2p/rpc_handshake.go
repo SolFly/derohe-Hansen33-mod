@@ -170,7 +170,7 @@ func (c *Connection) Handshake(request Handshake_Struct, response *Handshake_Str
 			}
 		}
 	}
-	if config.WhitelistIncoming || !c.Incoming {
+	if config.RunningConfig.WhitelistIncoming || !c.Incoming {
 		Peer_SetSuccess(c.Addr.String())
 	}
 

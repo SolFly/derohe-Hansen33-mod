@@ -121,18 +121,36 @@ func Address(c *Connection) string {
 func (c *Connection) exit() {
 	defer globals.Recover(0)
 	c.onceexit.Do(func() {
-		c.ConnTls.Close()
-		c.Conn.Close()
-		c.Client.Close()
+		errClient := c.Client.Close()
+		if errClient == nil {
+			errTls := c.ConnTls.Close()
+			if errTls == nil {
+				c.Conn.Close()
+			}
+		}
 	})
 
 }
 
 // add connection to  map
 func Connection_Delete(c *Connection) {
+
+	ip_str, x := ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]
+	if x {
+		if ip_str == c.Addr.String() {
+			c.logger.V(2).Info(fmt.Sprintf("Deleting Connection: %s", c.Addr.String()))
+			delete(ConnectDuplicatioMap, ParseIPNoError(c.Addr.String()))
+		} else {
+			c.logger.V(2).Info(fmt.Sprintf("Deleting Duplicate Connection: %s vs %s", ip_str, c.Addr.String()))
+		}
+	}
+
 	connection_map.Range(func(k, value interface{}) bool {
 		v := value.(*Connection)
+
+		// Clear all connection to same IP
 		if c.Addr.String() == v.Addr.String() {
+			// if ParseIPNoError(c.Addr.String()) == ParseIPNoError(v.Addr.String()) {
 			connection_map.Delete(Address(v))
 			return false
 		}
@@ -140,12 +158,45 @@ func Connection_Delete(c *Connection) {
 	})
 }
 
-var last_peer_drop_time = time.Now().Unix()
+func ListAllConnections() {
+
+	var conn_count int = 0
+
+	var myconnections = make(map[string][]*Connection)
+
+	// Collect some connection stats
+	connection_map.Range(func(k, value interface{}) bool {
+		v := value.(*Connection)
+
+		myconnections[ParseIPNoError(v.Addr.String())] = append(myconnections[ParseIPNoError(v.Addr.String())], v)
+
+		conn_count++
+		return true
+	})
+
+	connection_map.Range(func(k, value interface{}) bool {
+		v := value.(*Connection)
+
+		_, x := myconnections[ParseIPNoError(v.Addr.String())]
+
+		if x {
+			for _, con := range myconnections[ParseIPNoError(v.Addr.String())] {
+				logger.Info(fmt.Sprintf("Connection (%s) added to %s, last update from peer was %s ago", con.Addr.String(), time.Now().Sub(con.Created).Round(time.Second).String(), time.Now().Sub(con.update_received).Round(time.Second).String()))
+
+			}
+
+		}
+
+		return true
+	})
+
+	logger.Info(fmt.Sprintf("Total Connections: %d (Unique: %d)", conn_count, len(myconnections)))
+
+}
 
 func Connection_Pending_Clear() {
 
-	var dropped_peers = make(map[string]int)
-
+	var pending_clear_count int = 0
 	connection_map.Range(func(k, value interface{}) bool {
 		v := value.(*Connection)
 		if atomic.LoadUint32(&v.State) == HANDSHAKE_PENDING && time.Now().Sub(v.Created) > 10*time.Second { //and skip ourselves
@@ -153,18 +204,11 @@ func Connection_Pending_Clear() {
 			v.logger.V(3).Info("Cleaning pending connection")
 		}
 
-		if time.Now().Sub(v.update_received).Round(time.Second).Seconds() > 20 && len(dropped_peers) < 10 && last_peer_drop_time+120 < time.Now().Unix() {
-
+		if time.Now().Sub(v.update_received).Round(time.Second).Seconds() > 20 && pending_clear_count < 10 {
 			v.exit()
 			Connection_Delete(v)
-			v.logger.V(1).Info(fmt.Sprintf("Purging connection (%s) due since idle for %s", v.Addr.String(), time.Now().Sub(v.update_received).Round(time.Second).String()))
-
-			//Rate limit the peer drops so we don't drop all peers at once
-			dropped_peers[v.Addr.String()]++
-			if len(dropped_peers) >= 10 {
-				logger.Info("Peer Drop Rate Limit (10) Reached - waiting 120 sec before dropping any more peers")
-				last_peer_drop_time = time.Now().Unix()
-			}
+			v.logger.V(1).Info(fmt.Sprintf("Purging connection (%s) since idle for %s", v.Addr.String(), time.Now().Sub(v.update_received).Round(time.Second).String()))
+			pending_clear_count++
 		}
 
 		if IsAddressInBanList(Address(v)) {
@@ -172,8 +216,13 @@ func Connection_Pending_Clear() {
 			Connection_Delete(v)
 			v.logger.V(1).Info("Purging connection due to ban list")
 		}
+
 		return true
 	})
+
+	if pending_clear_count > 1 {
+		logger.V(1).Info(fmt.Sprintf("Purged %d/%d connections", pending_clear_count, Peer_Count()))
+	}
 }
 
 var connection_map sync.Map // map[string]*Connection{}
@@ -190,10 +239,29 @@ func IsAddressConnected(address string) bool {
 // we also check for limits for incoming connections
 // same ip max 8 ip ( considering NAT)
 //same Peer ID   4
+
+var connection_counter int = 0
+
+var ConnectDuplicatioMap = make(map[string]string)
+
 func Connection_Add(c *Connection) bool {
+
+	_, x := ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]
+	if x {
+		c.logger.Info(fmt.Sprintf("Connection (%s) already added (%s)", c.Addr.String(), ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]))
+		return true
+	}
+
 	if dup, ok := connection_map.LoadOrStore(Address(c), c); !ok {
+
+		connection_counter++
 		c.Created = time.Now()
-		c.logger.V(3).Info("IP address being added", "ip", c.Addr.String())
+		c.update_received = time.Now()
+
+		c.logger.V(3).Info(fmt.Sprintf("IP address being added (%d)", connection_counter), "ip", c.Addr.String())
+
+		ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())] = c.Addr.String()
+
 		return true
 	} else {
 		c.logger.V(3).Info("IP address already has one connection, exiting this connection", "ip", c.Addr.String(), "pre", dup.(*Connection).Addr.String())
@@ -210,7 +278,7 @@ func UniqueConnections() map[uint64]*Connection {
 	unique_map := map[uint64]*Connection{}
 	connection_map.Range(func(k, value interface{}) bool {
 		v := value.(*Connection)
-		if atomic.LoadUint32(&v.State) != HANDSHAKE_PENDING && GetPeerID() != v.Peer_ID { //and skip ourselves
+		if atomic.LoadUint32(&v.State) != HANDSHAKE_PENDING && GetPeerID() != v.Peer_ID && time.Now().Sub(v.update_received).Round(time.Second).Seconds() < 20 { //and skip ourselves
 			unique_map[v.Peer_ID] = v // map will automatically deduplicate/overwrite previous
 		}
 		return true
@@ -293,12 +361,7 @@ func Connection_Print() {
 		}
 
 		PeerAddress := ParseIPNoError(clist[i].Addr.String())
-		var success_rate float64 = 100
-		_, ps := BlockInsertCount[PeerAddress]
-		if ps {
-			total := (BlockInsertCount[PeerAddress].Blocks_Accepted + BlockInsertCount[PeerAddress].Blocks_Rejected)
-			success_rate = float64(float64(float64(BlockInsertCount[PeerAddress].Blocks_Accepted) / float64(total) * 100))
-		}
+		_, _, _, SuccessRate := GetPeerBTS(PeerAddress)
 
 		dir := "OUT"
 		if clist[i].Incoming {
@@ -334,7 +397,7 @@ func Connection_Print() {
 		ctime := time.Now().Sub(clist[i].Created).Round(time.Second)
 
 		hstring := fmt.Sprintf("%d/%d/%d", clist[i].StableHeight, clist[i].Height, clist[i].TopoHeight)
-		fmt.Printf("%-30s %16x %5d %7s %7s %7s %23s %s %7.2f %7s %7s     %16s %s %x\n", Address(clist[i])+" ("+ctime.String()+")", clist[i].Peer_ID, clist[i].Port, state, time.Duration(atomic.LoadInt64(&clist[i].Latency)).Round(time.Millisecond).String(), time.Duration(atomic.LoadInt64(&clist[i].clock_offset)).Round(time.Millisecond).String(), hstring, dir, success_rate, humanize.Bytes(atomic.LoadUint64(&clist[i].BytesIn)), humanize.Bytes(atomic.LoadUint64(&clist[i].BytesOut)), version, tag, clist[i].StateHash[:])
+		fmt.Printf("%-30s %16x %5d %7s %7s %7s %23s %s %7.2f %7s %7s     %16s %s %x\n", Address(clist[i])+" ("+ctime.String()+")", clist[i].Peer_ID, clist[i].Port, state, time.Duration(atomic.LoadInt64(&clist[i].Latency)).Round(time.Millisecond).String(), time.Duration(atomic.LoadInt64(&clist[i].clock_offset)).Round(time.Millisecond).String(), hstring, dir, SuccessRate, humanize.Bytes(atomic.LoadUint64(&clist[i].BytesIn)), humanize.Bytes(atomic.LoadUint64(&clist[i].BytesOut)), version, tag, clist[i].StateHash[:])
 
 		fmt.Print(color_normal)
 	}
@@ -434,7 +497,7 @@ func broadcast_Block_Coded(cbl *block.Complete_Block, PeerID uint64, first_seen 
 		return connections[i].Latency < connections[j].Latency
 	})
 
-	bw_factor := int(config.P2PBWFactor)
+	bw_factor := int(config.RunningConfig.P2PBWFactor)
 	if bw_factor < 1 {
 		bw_factor = 1
 	}
@@ -481,7 +544,7 @@ func broadcast_Block_Coded(cbl *block.Complete_Block, PeerID uint64, first_seen 
 					var dummy Dummy
 					fill_common(&peer_specific_list.Common) // fill common info
 					if err := connection.Client.Call("Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
-						go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Block_Coded", cbl.Bl.GetHash().String(), connection.Peer_ID, err.Error())
+						go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Block_Coded", connection.Peer_ID, err.Error())
 						go LogReject(connection.Addr.String())
 						return
 					} else {
@@ -549,7 +612,7 @@ func broadcast_Chunk(chunk *Block_Chunk, PeerID uint64, first_seen int64) { // i
 				var dummy Dummy
 				fill_common(&peer_specific_list.Common) // fill common info
 				if err := connection.Client.Call("Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
-					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Chunk", fmt.Sprintf("%x", chunk.BLID), connection.Peer_ID, err.Error())
+					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Chunk", connection.Peer_ID, err.Error())
 					go LogReject(connection.Addr.String())
 					return
 				} else {
@@ -608,7 +671,7 @@ func broadcast_MiniBlock(mbl block.MiniBlock, PeerID uint64, first_seen int64) {
 
 				var dummy Dummy
 				if err := connection.Client.Call("Peer.NotifyMiniBlock", peer_specific_block, &dummy); err != nil {
-					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_MiniBlock", mbl.GetHash().String(), connection.Peer_ID, err.Error())
+					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_MiniBlock", connection.Peer_ID, err.Error())
 					go LogReject(connection.Addr.String())
 					return
 				} else {

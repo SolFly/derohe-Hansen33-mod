@@ -104,10 +104,10 @@ func P2P_Init(params map[string]interface{}) error {
 	}
 	if os.Getenv("TURBO") == "0" {
 		logger.Info("P2P is in normal mode")
-		config.P2PTurbo = false
+		config.RunningConfig.P2PTurbo = false
 	} else {
 		logger.Info("P2P is in turbo mode")
-		config.P2PTurbo = true
+		config.RunningConfig.P2PTurbo = true
 	}
 
 	if os.Getenv("BW_FACTOR") != "" {
@@ -117,7 +117,7 @@ func P2P_Init(params map[string]interface{}) error {
 		}
 
 		logger.Info("", "BW_FACTOR", bw_factor)
-		config.P2PBWFactor = int64(bw_factor)
+		config.RunningConfig.P2PBWFactor = int64(bw_factor)
 	}
 
 	if os.Getenv("UDP_READ_BUF_CONN") != "" {
@@ -170,7 +170,8 @@ func P2P_Init(params map[string]interface{}) error {
 	globals.Cron.AddFunc("@every 10s", chunks_clean_up)         // clean chunks
 	globals.Cron.AddFunc("@every 60s", save_peer_list)          // save peer list so we can use it for monitoring
 	globals.Cron.AddFunc("@every 60s", save_ban_list)           // save peer list so we can use it for monitoring
-	globals.Cron.AddFunc("@every 60s", save_permban_list)
+	globals.Cron.AddFunc("@every 60s", save_permban_list)       // save permban list
+	globals.Cron.AddFunc("@every 60s", ClearPeerLogsCron)       // cleanup running peer logs
 
 	go time_check_routine() // check whether server time is in sync using ntp
 
@@ -284,7 +285,7 @@ func P2P_engine() {
 
 func tunekcp(conn *kcp.UDPSession) {
 	conn.SetACKNoDelay(true)
-	if config.P2PTurbo {
+	if config.RunningConfig.P2PTurbo {
 		conn.SetNoDelay(1, 10, 2, 1) // tuning paramters for local stack for fast retransmission stack
 	} else {
 		conn.SetNoDelay(0, 40, 0, 0) // tuning paramters for local
