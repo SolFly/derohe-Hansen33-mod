@@ -17,6 +17,7 @@
 package p2p
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"sync/atomic"
@@ -93,7 +94,11 @@ func (c *Connection) NotifyINV(request ObjectList, response *Dummy) (err error) 
 	if dirty { //  request inventory only if we want it
 		var oresponse Objects
 		fill_common(&need.Common) // fill common info
-		if err = c.Client.Call("Peer.GetObject", need, &oresponse); err != nil {
+
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+
+		if err = c.Client.CallWithContext(ctx, "Peer.GetObject", need, &oresponse); err != nil {
 			c.logger.V(2).Error(err, "Call failed GetObject", "need_objects", need)
 			c.exit()
 			return
@@ -131,6 +136,9 @@ func (c *Connection) NotifyMiniBlock(request Objects, response *Dummy) (err erro
 			return err
 		}
 		mbls = append(mbls, mbl)
+
+		atomic.AddUint64(&c.BytesIn, 1)
+		go LogMiniblock(mbl, c.Addr.String())
 	}
 
 	var valid_found bool
@@ -220,6 +228,8 @@ func (c *Connection) processChunkedBlock(request Objects, data_shard_count, pari
 	}
 
 	blid := bl.GetHash()
+	go LogFinalBlock(bl, c.Addr.String())
+	atomic.AddUint64(&c.BytesIn, 1)
 
 	// object is already is in our chain, we need not relay it
 	if chain.Is_Block_Topological_order(blid) || chain.Is_Block_Tip(blid) {
@@ -253,7 +263,8 @@ func (c *Connection) processChunkedBlock(request Objects, data_shard_count, pari
 		go LogAccept(c.Addr.String())
 
 	} else { // ban the peer for sometime
-		go PeerLogReceiveFail(c.Addr.String(), "InsertMiniBlock", c.Peer_ID, err.Error())
+		c.logger.Error(err, "Error adding block from peer...")
+		go PeerLogReceiveFail(c.Addr.String(), "Add_Complete_Block", c.Peer_ID, err.Error())
 		go LogReject(c.Addr.String())
 		if err == errormsg.ErrInvalidPoW {
 			c.logger.Error(err, "This peer should be banned and terminated")

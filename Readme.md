@@ -3,17 +3,18 @@
 If you don't alredy know DERO - Check out [Dero git repo](https://github.com/deroproject/derohe)
 
 * This is a Weaponized version of Dero Daemon, this is NOT the official release of DERO.
-* Please use with causion, as with all weapons you may or may not hurt your self using this.
+* Please use with caution, as with all weapons you may or may not hurt yourself or others using this.
 * If all your minis get lost or your computer blows up, it's no my fault, you installed this.
 
 
 * This modded DERO version is running and providing live stats for on the nodes below
-  * UK Node - https://dero-node.mysrv.cloud
-  * US Node - https://dero-node-us.mysrv.cloud 
+  * Europe Node - https://dero-node.mysrv.cloud
+  * North America Node - https://dero-node-us.mysrv.cloud 
+  * South Ammerica Node - https://dero-node-sa.mysrv.cloud 
 
 ### Developers
 
- * @Hansen333
+ * @Hansen33
    * Address: dero1qy07h9mk6xxf2k4x0ymdpezvksjy0talskhpvqmat3xk3d9wczg5jqqvwl0sn
  * @arodd
    * Address: dero1qyss8jkqfkvp4vlxfx3l7f9rr7m55ff3q633ag8xemzv0el90m2j2qqy0te2c
@@ -23,7 +24,13 @@ If you don't alredy know DERO - Check out [Dero git repo](https://github.com/der
 ### Changes from official release includes
 
  More Options, switches and buttons 
- 
+ * Miner (--text-mode) - no interactiveness, just mining and output update every 60 sec
+ * Active Miner Metrics - Node Guessing
+ * Miner Hashrate, Tagging and Orphan to Miner Reporting**
+ * Live mining stats including orphan counters.
+ * Wallet Socks Proxy Support and TOR Onion Support**
+ `  --daemon-address vpilhs5wew52w75igez5fye2c572lccuo7l5emyxxvo53darwec6x7yd.onion:10102`
+ * BlocksIn/BlocksOut count in syncinfo - repurposed unused official counters
  * AddressToName - command to look up names inside derod (using HarkerK code)
  * Allow more than 31 incoming peers (will use max_peer option as limit)
  * Miners list and mining performance stats

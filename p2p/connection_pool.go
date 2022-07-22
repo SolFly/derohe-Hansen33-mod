@@ -108,6 +108,7 @@ type Connection struct {
 }
 
 func ConnecToNode(address string) {
+
 	go connect_with_endpoint(address, false)
 }
 
@@ -121,13 +122,10 @@ func Address(c *Connection) string {
 func (c *Connection) exit() {
 	defer globals.Recover(0)
 	c.onceexit.Do(func() {
-		errClient := c.Client.Close()
-		if errClient == nil {
-			errTls := c.ConnTls.Close()
-			if errTls == nil {
-				c.Conn.Close()
-			}
-		}
+		c.Client.Close()
+		c.ConnTls.Close()
+		c.Conn.Close()
+
 	})
 
 }
@@ -135,6 +133,8 @@ func (c *Connection) exit() {
 // add connection to  map
 func Connection_Delete(c *Connection) {
 
+	duplicate_connection_mutex.Lock()
+	defer duplicate_connection_mutex.Unlock()
 	ip_str, x := ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]
 	if x {
 		if ip_str == c.Addr.String() {
@@ -150,48 +150,13 @@ func Connection_Delete(c *Connection) {
 
 		// Clear all connection to same IP
 		if c.Addr.String() == v.Addr.String() {
+			c.exit()
 			// if ParseIPNoError(c.Addr.String()) == ParseIPNoError(v.Addr.String()) {
 			connection_map.Delete(Address(v))
 			return false
 		}
 		return true
 	})
-}
-
-func ListAllConnections() {
-
-	var conn_count int = 0
-
-	var myconnections = make(map[string][]*Connection)
-
-	// Collect some connection stats
-	connection_map.Range(func(k, value interface{}) bool {
-		v := value.(*Connection)
-
-		myconnections[ParseIPNoError(v.Addr.String())] = append(myconnections[ParseIPNoError(v.Addr.String())], v)
-
-		conn_count++
-		return true
-	})
-
-	connection_map.Range(func(k, value interface{}) bool {
-		v := value.(*Connection)
-
-		_, x := myconnections[ParseIPNoError(v.Addr.String())]
-
-		if x {
-			for _, con := range myconnections[ParseIPNoError(v.Addr.String())] {
-				logger.Info(fmt.Sprintf("Connection (%s) added to %s, last update from peer was %s ago", con.Addr.String(), time.Now().Sub(con.Created).Round(time.Second).String(), time.Now().Sub(con.update_received).Round(time.Second).String()))
-
-			}
-
-		}
-
-		return true
-	})
-
-	logger.Info(fmt.Sprintf("Total Connections: %d (Unique: %d)", conn_count, len(myconnections)))
-
 }
 
 func Connection_Pending_Clear() {
@@ -243,9 +208,12 @@ func IsAddressConnected(address string) bool {
 var connection_counter int = 0
 
 var ConnectDuplicatioMap = make(map[string]string)
+var duplicate_connection_mutex sync.Mutex
 
 func Connection_Add(c *Connection) bool {
 
+	duplicate_connection_mutex.Lock()
+	defer duplicate_connection_mutex.Unlock()
 	_, x := ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]
 	if x {
 		c.logger.Info(fmt.Sprintf("Connection (%s) already added (%s)", c.Addr.String(), ConnectDuplicatioMap[ParseIPNoError(c.Addr.String())]))
@@ -530,6 +498,8 @@ func broadcast_Block_Coded(cbl *block.Complete_Block, PeerID uint64, first_seen 
 					goto done
 				}
 
+				atomic.AddUint64(&v.BytesOut, 1)
+				// Can or should we adjust this based on tip expansion failure?
 				go func(connection *Connection, cid int) {
 					defer globals.Recover(3)
 					var peer_specific_list ObjectList
@@ -543,12 +513,17 @@ func broadcast_Block_Coded(cbl *block.Complete_Block, PeerID uint64, first_seen 
 					connection.logger.V(3).Info("Sending erasure coded chunk to peer ", "cid", cid)
 					var dummy Dummy
 					fill_common(&peer_specific_list.Common) // fill common info
-					if err := connection.Client.Call("Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
-						go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Block_Coded", connection.Peer_ID, err.Error())
-						go LogReject(connection.Addr.String())
+
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					if err := connection.Client.CallWithContext(ctx, "Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
+						PeerLogConnectionFail(connection.Addr.String(), "broadcast_Block_Coded", connection.Peer_ID, err.Error())
+						LogReject(connection.Addr.String())
+
 						return
 					} else {
-						go LogAccept(connection.Addr.String())
+						LogAccept(connection.Addr.String())
 					}
 					connection.update(&dummy.Common) // update common information
 
@@ -596,7 +571,7 @@ func broadcast_Chunk(chunk *Block_Chunk, PeerID uint64, first_seen int64) { // i
 			}
 
 			count++
-
+			atomic.AddUint64(&v.BytesOut, 1)
 			go func(connection *Connection) {
 				defer globals.Recover(3)
 				var peer_specific_list ObjectList
@@ -611,16 +586,21 @@ func broadcast_Chunk(chunk *Block_Chunk, PeerID uint64, first_seen int64) { // i
 				connection.logger.V(3).Info("Sending erasure coded chunk INV to peer ", "raw", fmt.Sprintf("%x", chunkid), "blid", fmt.Sprintf("%x", chunk.BLID), "cid", chunk.CHUNK_ID, "hhash", fmt.Sprintf("%x", hhash), "exists", nil != is_chunk_exist(hhash, uint8(chunk.CHUNK_ID)))
 				var dummy Dummy
 				fill_common(&peer_specific_list.Common) // fill common info
-				if err := connection.Client.Call("Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
-					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_Chunk", connection.Peer_ID, err.Error())
-					go LogReject(connection.Addr.String())
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				if err := connection.Client.CallWithContext(ctx, "Peer.NotifyINV", peer_specific_list, &dummy); err != nil {
+					PeerLogConnectionFail(connection.Addr.String(), "broadcast_Chunk", connection.Peer_ID, err.Error())
+					LogReject(connection.Addr.String())
+
 					return
 				} else {
-					go LogAccept(connection.Addr.String())
+					LogAccept(connection.Addr.String())
 				}
 				connection.update(&dummy.Common) // update common information
-			}(v)
 
+			}(v)
 		}
 	}
 }
@@ -664,20 +644,31 @@ func broadcast_MiniBlock(mbl block.MiniBlock, PeerID uint64, first_seen int64) {
 			if (our_height - peer_height) > 25 {
 				continue
 			}
+			atomic.AddUint64(&v.BytesOut, 1)
 
 			count++
 			go func(connection *Connection) {
 				defer globals.Recover(3)
 
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
 				var dummy Dummy
-				if err := connection.Client.Call("Peer.NotifyMiniBlock", peer_specific_block, &dummy); err != nil {
-					go PeerLogConnectionFail(connection.Addr.String(), "broadcast_MiniBlock", connection.Peer_ID, err.Error())
-					go LogReject(connection.Addr.String())
+				if err := connection.Client.CallWithContext(ctx, "Peer.NotifyMiniBlock", peer_specific_block, &dummy); err != nil {
+					PeerLogConnectionFail(connection.Addr.String(), "broadcast_MiniBlock", connection.Peer_ID, err.Error())
+					LogReject(connection.Addr.String())
+
+					if PeerID == GetPeerID() || PeerID == 0 {
+						// resend list might be best - try out for x amout of time and delete peer
+						SelfishNodeCounter(connection.Addr.String(), "broadcast_MiniBlock", connection.Peer_ID, err.Error(), mbl.Serialize())
+					}
+
 					return
 				} else {
-					go LogAccept(connection.Addr.String())
+					LogAccept(connection.Addr.String())
 				}
 				connection.update(&dummy.Common) // update common information
+
 			}(v)
 		}
 
@@ -732,9 +723,12 @@ func broadcast_Tx(tx *transaction.Transaction, PeerID uint64, sent int64) (relay
 					}
 				}()
 
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
 				var dummy Dummy
 				fill_common(&dummy.Common) // fill common info
-				if err := connection.Client.Call("Peer.NotifyINV", request, &dummy); err != nil {
+				if err := connection.Client.CallWithContext(ctx, "Peer.NotifyINV", request, &dummy); err != nil {
 					return
 				}
 				connection.update(&dummy.Common) // update common information

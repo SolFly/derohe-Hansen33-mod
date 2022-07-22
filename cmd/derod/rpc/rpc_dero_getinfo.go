@@ -126,9 +126,26 @@ func GetInfo(ctx context.Context) (result rpc.GetInfo_Result, err error) {
 		result.MintingSuccessRate = float64(100 - float64(float64(result.CountMinisOrphaned/blocksMinted)*100))
 	}
 
-	result.Minting_Velocity_1hr = float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600
-	result.Minting_Velocity_1day = float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600 * 24
+	velocity_1h := float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600
+	if velocity_1h > float64(blocksMinted) {
+		velocity_1h = float64(blocksMinted)
+	}
+
+	velocity_1d := float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600 * 24
+	if velocity_1d > float64(blocksMinted) {
+		velocity_1d = float64(blocksMinted)
+	}
+
+	result.Minting_Velocity_1hr = velocity_1h
+	result.Minting_Velocity_1day = velocity_1d
 	result.Uptime = uint64(time.Now().Sub(globals.StartTime).Seconds())
+
+	result.CountThreads = globals.CountThreads()
+	result.CountBlocked = globals.CountBlocked()
+	result.CountMutex = globals.CountMutex()
+	result.CountGoProcs = globals.CountGoProcs()
+
+	result.NetworkActiveMiners = p2p.GetActiveMinersCountFromHeight(chain.Get_Height() - config.RunningConfig.NetworkStatsKeepCount)
 
 	result.HashrateEstimatePercent_1hr = uint64((float64(chain.Get_Network_HashRate()) * HashrateEstimatePercent_1hr()) / 100)
 	result.HashrateEstimatePercent_1day = uint64((float64(chain.Get_Network_HashRate()) * HashrateEstimatePercent_1day()) / 100)

@@ -82,7 +82,9 @@ func shouldwebackoff(ip string) bool {
 		}
 	}
 
-	if backoff[ip] != 0 { // now lets do the test
+	_, backoff_ip := backoff[ip]
+
+	if backoff_ip { // now lets do the test
 		return true
 	}
 	return false
@@ -99,7 +101,7 @@ func P2P_Init(params map[string]interface{}) error {
 	// parse node tag if availble
 	if _, ok := globals.Arguments["--node-tag"]; ok {
 		if globals.Arguments["--node-tag"] != nil {
-			node_tag = globals.Arguments["--node-tag"].(string)
+			SetNodeTag(globals.Arguments["--node-tag"].(string))
 		}
 	}
 	if os.Getenv("TURBO") == "0" {
@@ -459,6 +461,7 @@ func maintain_connection_to_peers() {
 				logger.Error(fmt.Errorf("--min-peers should be positive and more than 1"), "")
 			} else {
 				Min_Peers = i
+				config.RunningConfig.Min_Peers = Min_Peers
 			}
 		}
 		logger.Info("Min peers", "min-peers", Min_Peers)
@@ -473,6 +476,7 @@ func maintain_connection_to_peers() {
 				logger.Error(fmt.Errorf("--max-peers should be positive and more than --min-peers"), "")
 			} else {
 				Max_Peers = i
+				config.RunningConfig.Max_Peers = Max_Peers
 			}
 		}
 		logger.Info("Max peers", "max-peers", Max_Peers)
@@ -494,8 +498,8 @@ func maintain_connection_to_peers() {
 
 		// check number of connections, if limit is reached, trigger new connections if we have peers
 		// if we have more do nothing
-		_, out := Peer_Direction_Count()
-		if out >= uint64(Min_Peers) { // we already have required number of peers, donot connect to more peers
+		in, out := Peer_Direction_Count()
+		if out+in >= uint64(Max_Peers) { // we already have required number of peers, donot connect to more peers
 			continue
 		}
 
@@ -508,7 +512,7 @@ func maintain_connection_to_peers() {
 
 func P2P_Server_v2() {
 
-	var accept_limiter = rate.NewLimiter(10.0, 40) // 10 incoming per sec, burst of 40 is okay
+	var accept_limiter = rate.NewLimiter(100.0, 40) // 10 incoming per sec, burst of 40 is okay
 
 	default_address := "0.0.0.0:0" // be default choose a random port
 	if _, ok := globals.Arguments["--p2p-bind"]; ok && globals.Arguments["--p2p-bind"] != nil {
@@ -553,6 +557,7 @@ func P2P_Server_v2() {
 		go func() {
 			time.Sleep(2 * time.Second)
 			connection.dispatch_test_handshake()
+
 		}()
 
 	})
@@ -602,7 +607,7 @@ func P2P_Server_v2() {
 		raddr := conn.RemoteAddr().(*net.UDPAddr)
 
 		backoff_mutex.Lock()
-		backoff[ParseIPNoError(raddr.String())] = time.Now().Unix() + globals.Global_Random.Int63n(200) // random backing of upto 200 secs
+		backoff[ParseIPNoError(raddr.String())] = time.Now().Unix() + 10
 		backoff_mutex.Unlock()
 
 		logger.V(3).Info("accepting incoming connection", "raddr", raddr.String())

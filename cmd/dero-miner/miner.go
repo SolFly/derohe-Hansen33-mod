@@ -16,40 +16,38 @@
 
 package main
 
-import "io"
-import "os"
-import "fmt"
-import "time"
-import "net/url"
-import "crypto/rand"
-import "crypto/tls"
-import "sync"
-import "runtime"
-import "math/big"
-import "path/filepath"
-import "encoding/hex"
-import "encoding/binary"
-import "os/signal"
-import "sync/atomic"
-import "strings"
-import "strconv"
+import (
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"math/big"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
-import "github.com/go-logr/logr"
-
-import "github.com/deroproject/derohe/config"
-import "github.com/deroproject/derohe/globals"
+	"github.com/chzyer/readline"
+	"github.com/deroproject/derohe/astrobwt/astrobwt_fast"
+	"github.com/deroproject/derohe/astrobwt/astrobwtv3"
+	"github.com/deroproject/derohe/block"
+	"github.com/deroproject/derohe/config"
+	"github.com/deroproject/derohe/globals"
+	"github.com/deroproject/derohe/rpc"
+	"github.com/docopt/docopt-go"
+	"github.com/go-logr/logr"
+	"github.com/gorilla/websocket"
+)
 
 //import "github.com/deroproject/derohe/cryptography/crypto"
-import "github.com/deroproject/derohe/block"
-import "github.com/deroproject/derohe/rpc"
-
-import "github.com/chzyer/readline"
-import "github.com/docopt/docopt-go"
-
-import "github.com/deroproject/derohe/astrobwt/astrobwt_fast"
-import "github.com/deroproject/derohe/astrobwt/astrobwtv3"
-
-import "github.com/gorilla/websocket"
 
 var mutex sync.RWMutex
 var job rpc.GetBlockTemplate_Result
@@ -61,6 +59,12 @@ var max_pow_size int = 819200 //astrobwt.MAX_LENGTH
 var wallet_address string
 var daemon_rpc_address string
 
+var TextMode bool = false
+var ModdedNode bool = false
+var mining_speed float64
+var miner_tag string
+var miner_started = time.Now().Unix()
+
 var counter uint64
 var hash_rate uint64
 var Difficulty uint64
@@ -68,6 +72,7 @@ var our_height int64
 
 var block_counter uint64
 var mini_block_counter uint64
+var orphan_block_counter uint64
 var rejected uint64
 var logger logr.Logger
 
@@ -77,7 +82,7 @@ ONE CPU, ONE VOTE.
 http://wiki.dero.io
 
 Usage:
-  dero-miner  --wallet-address=<wallet_address> [--daemon-rpc-address=<minernode1.dero.live:10100>] [--mining-threads=<threads>] [--testnet] [--debug]
+  dero-miner  --wallet-address=<wallet_address> [--daemon-rpc-address=<dero-node.mysrv.cloud:10100>] [--mining-threads=<threads>] [--testnet] [--debug] [--tag=<tag>] [--text-mode]
   dero-miner --bench 
   dero-miner -h | --help
   dero-miner --version
@@ -86,11 +91,12 @@ Options:
   -h --help     Show this screen.
   --version     Show version.
   --bench  	    Run benchmark mode.
-  --daemon-rpc-address=<127.0.0.1:10102>    Miner will connect to daemon RPC on this port (default minernode1.dero.live:10100).
+  --daemon-rpc-address=<127.0.0.1:10102>    Miner will connect to daemon RPC on this port (default dero-node.mysrv.cloud:10100).
   --wallet-address=<wallet_address>    This address is rewarded when a block is mined sucessfully.
   --mining-threads=<threads>         Number of CPU threads for mining [default: ` + fmt.Sprintf("%d", runtime.GOMAXPROCS(0)) + `]
+  --tag=<tag>						Set Miner Tag (Hansen33 Mod Feature).
 
-Example Mainnet: ./dero-miner-linux-amd64 --wallet-address dero1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqhmy4zf --daemon-rpc-address=minernode1.dero.live:10100
+Example Mainnet: ./dero-miner-linux-amd64 --wallet-address dero1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqhmy4zf --daemon-rpc-address=dero-node.mysrv.cloud:10100
 Example Testnet: ./dero-miner-linux-amd64 --wallet-address deto1qy0ehnqjpr0wxqnknyc66du2fsxyktppkr8m8e6jvplp954klfjz2qqdzcd8p --daemon-rpc-address=127.0.0.1:40402 
 If daemon running on local machine no requirement of '--daemon-rpc-address' argument. 
 `
@@ -107,24 +113,6 @@ func main() {
 		return
 	}
 
-	// We need to initialize readline first, so it changes stderr to ansi processor on windows
-
-	l, err := readline.NewEx(&readline.Config{
-		//Prompt:          "\033[92mDERO:\033[32m»\033[0m",
-		Prompt:          "\033[92mDERO Miner:\033[32m>>>\033[0m ",
-		HistoryFile:     filepath.Join(os.TempDir(), "dero_miner_readline.tmp"),
-		AutoComplete:    completer,
-		InterruptPrompt: "^C",
-		EOFPrompt:       "exit",
-
-		HistorySearchFold:   true,
-		FuncFilterInputRune: filterInput,
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer l.Close()
-
 	// parse arguments and setup logging , print basic information
 	exename, _ := os.Executable()
 	f, err := os.Create(exename + ".log")
@@ -132,7 +120,34 @@ func main() {
 		fmt.Printf("Error while opening log file err: %s filename %s\n", err, exename+".log")
 		return
 	}
-	globals.InitializeLog(l.Stdout(), f)
+
+	var l *readline.Instance
+	if !TextMode {
+
+		// We need to initialize readline first, so it changes stderr to ansi processor on windows
+
+		l, err = readline.NewEx(&readline.Config{
+			//Prompt:          "\033[92mDERO:\033[32m»\033[0m",
+			Prompt:          "\033[92mDERO Miner:\033[32m>>>\033[0m ",
+			HistoryFile:     filepath.Join(os.TempDir(), "dero_miner_readline.tmp"),
+			AutoComplete:    completer,
+			InterruptPrompt: "^C",
+			EOFPrompt:       "exit",
+
+			HistorySearchFold:   true,
+			FuncFilterInputRune: filterInput,
+		})
+		if err != nil {
+			panic(err)
+		}
+		defer l.Close()
+
+		globals.InitializeLog(l.Stdout(), f)
+
+	} else {
+		globals.InitializeLog(os.Stdout, f)
+	}
+
 	logger = globals.Logger.WithName("miner")
 
 	logger.Info("DERO Stargate HE AstroBWT miner : It is an alpha version, use it for testing/evaluations purpose only.")
@@ -155,8 +170,13 @@ func main() {
 		wallet_address = addr.String()
 	}
 
+	if globals.Arguments["--tag"] != nil {
+		miner_tag = globals.Arguments["--tag"].(string)
+	}
+
 	if !globals.Arguments["--testnet"].(bool) {
-		daemon_rpc_address = "minernode1.dero.live:10100"
+		// default miner node : dero-node.mysrv.cloud
+		daemon_rpc_address = "213.171.208.37:10100"
 	} else {
 		daemon_rpc_address = "127.0.0.1:10100"
 	}
@@ -176,6 +196,10 @@ func main() {
 		if threads > runtime.GOMAXPROCS(0) {
 			logger.Info("Mining threads is more than available CPUs. This is NOT optimal", "thread_count", threads, "max_possible", runtime.GOMAXPROCS(0))
 		}
+	}
+
+	if globals.Arguments["--text-mode"].(bool) {
+		TextMode = true
 	}
 
 	if globals.Arguments["--bench"].(bool) {
@@ -250,7 +274,7 @@ func main() {
 				mining_string := ""
 
 				if mining {
-					mining_speed := float64(counter-last_counter) / (float64(uint64(time.Since(last_counter_time))) / 1000000000.0)
+					mining_speed = float64(counter-last_counter) / (float64(uint64(time.Since(last_counter_time))) / 1000000000.0)
 					last_counter = counter
 					last_counter_time = time.Now()
 					switch {
@@ -258,7 +282,7 @@ func main() {
 						mining_string = fmt.Sprintf("MINING @ %.3f MH/s", float32(mining_speed)/1000000.0)
 					case mining_speed > 1000:
 						mining_string = fmt.Sprintf("MINING @ %.3f KH/s", float32(mining_speed)/1000.0)
-					case mining_speed > 0:
+					case mining_speed >= 0:
 						mining_string = fmt.Sprintf("MINING @ %.0f H/s", mining_speed)
 					}
 				}
@@ -284,8 +308,17 @@ func main() {
 					testnet_string = "\033[31m TESTNET"
 				}
 
-				l.SetPrompt(fmt.Sprintf("\033[1m\033[32mDERO Miner: \033[0m"+color+"Height %d "+pcolor+" BLOCKS %d MiniBlocks %d Rejected %d \033[32mNW %s %s>%s>>\033[0m ", our_height, block_counter, mini_block_counter, rejected, hash_rate_string, mining_string, testnet_string))
-				l.Refresh()
+				uptime := (time.Now().Unix() - miner_started)
+				if TextMode && (uptime%60 == 0 || (uptime <= 10)) {
+					fmt.Printf("DERO Miner: Height %d BLOCKS %d MiniBlocks %d Rejected %d NW %s %s Uptime: %d\n", our_height, block_counter, mini_block_counter, rejected, hash_rate_string, mining_string, uptime)
+				} else if !TextMode {
+					if ModdedNode {
+						l.SetPrompt(fmt.Sprintf("\033[1m\033[32mDERO Miner: \033[0m"+color+"Height %d "+pcolor+" BLOCKS %d MiniBlocks %d Orphans %d Rejected %d \033[32mNW %s %s>%s>>\033[0m ", our_height, block_counter, mini_block_counter, orphan_block_counter, rejected, hash_rate_string, mining_string, testnet_string))
+					} else {
+						l.SetPrompt(fmt.Sprintf("\033[1m\033[32mDERO Miner: \033[0m"+color+"Height %d "+pcolor+" BLOCKS %d MiniBlocks %d Rejected %d \033[32mNW %s %s>%s>>\033[0m ", our_height, block_counter, mini_block_counter, rejected, hash_rate_string, mining_string, testnet_string))
+					}
+					l.Refresh()
+				}
 				last_our_height = our_height
 				last_best_height = best_height
 			}
@@ -293,7 +326,9 @@ func main() {
 		}
 	}()
 
-	l.Refresh() // refresh the prompt
+	if !TextMode {
+		l.Refresh() // refresh the prompt
+	}
 
 	go func() {
 		var gracefulStop = make(chan os.Signal, 1)
@@ -315,57 +350,79 @@ func main() {
 
 	go getwork(wallet_address)
 
+	go func() {
+		for {
+
+			if ModdedNode {
+
+				logger.V(1).Info("Sending Miner Update to node")
+
+				go func() {
+					defer globals.Recover(1)
+					connection_mutex.Lock()
+					defer connection_mutex.Unlock()
+					connection.WriteJSON(rpc.MinerInfo_Params{Wallet_Address: wallet_address, Miner_Tag: miner_tag, Miner_Hashrate: mining_speed})
+				}()
+
+			}
+
+			time.Sleep(10 * time.Second)
+		}
+	}()
+
 	for i := 0; i < threads; i++ {
 		go mineblock(i)
 	}
 
-	for {
-		line, err := l.Readline()
-		if err == readline.ErrInterrupt {
-			if len(line) == 0 {
-				fmt.Print("Ctrl-C received, Exit in progress\n")
+	if !TextMode {
+		for {
+			line, err := l.Readline()
+			if err == readline.ErrInterrupt {
+				if len(line) == 0 {
+					fmt.Print("Ctrl-C received, Exit in progress\n")
+					close(Exit_In_Progress)
+					os.Exit(0)
+					break
+				} else {
+					continue
+				}
+			} else if err == io.EOF {
+				<-Exit_In_Progress
+				break
+			}
+
+			line = strings.TrimSpace(line)
+			line_parts := strings.Fields(line)
+
+			command := ""
+			if len(line_parts) >= 1 {
+				command = strings.ToLower(line_parts[0])
+			}
+
+			switch {
+			case line == "help":
+				usage(l.Stderr())
+
+			case strings.HasPrefix(line, "say"):
+				line := strings.TrimSpace(line[3:])
+				if len(line) == 0 {
+					fmt.Println("say what?")
+					break
+				}
+			case command == "version":
+				fmt.Printf("Version %s OS:%s ARCH:%s \n", config.Version.String(), runtime.GOOS, runtime.GOARCH)
+
+			case strings.ToLower(line) == "bye":
+				fallthrough
+			case strings.ToLower(line) == "exit":
+				fallthrough
+			case strings.ToLower(line) == "quit":
 				close(Exit_In_Progress)
 				os.Exit(0)
-				break
-			} else {
-				continue
+			case line == "":
+			default:
+				fmt.Println("you said:", strconv.Quote(line))
 			}
-		} else if err == io.EOF {
-			<-Exit_In_Progress
-			break
-		}
-
-		line = strings.TrimSpace(line)
-		line_parts := strings.Fields(line)
-
-		command := ""
-		if len(line_parts) >= 1 {
-			command = strings.ToLower(line_parts[0])
-		}
-
-		switch {
-		case line == "help":
-			usage(l.Stderr())
-
-		case strings.HasPrefix(line, "say"):
-			line := strings.TrimSpace(line[3:])
-			if len(line) == 0 {
-				fmt.Println("say what?")
-				break
-			}
-		case command == "version":
-			fmt.Printf("Version %s OS:%s ARCH:%s \n", config.Version.String(), runtime.GOOS, runtime.GOARCH)
-
-		case strings.ToLower(line) == "bye":
-			fallthrough
-		case strings.ToLower(line) == "exit":
-			fallthrough
-		case strings.ToLower(line) == "quit":
-			close(Exit_In_Progress)
-			os.Exit(0)
-		case line == "":
-		default:
-			fmt.Println("you said:", strconv.Quote(line))
 		}
 	}
 
@@ -443,6 +500,18 @@ func getwork(wallet_address string) {
 		hash_rate = job.Difficultyuint64
 		our_height = int64(job.Height)
 		Difficulty = job.Difficultyuint64
+
+		if ModdedNode != job.Hansen33Mod {
+			if job.Hansen33Mod {
+				logger.Info("Hansen33 Mod Mining Node Detected - Happy Mining")
+				orphan_block_counter = job.Orphans
+			}
+		}
+		ModdedNode = job.Hansen33Mod
+
+		if !ModdedNode && job_counter == 1 {
+			logger.Info("Official Mining Node Detected - Happy Mining")
+		}
 
 		//fmt.Printf("recv: %+v diff %d\n", result, Difficulty)
 		goto wait_for_another_job

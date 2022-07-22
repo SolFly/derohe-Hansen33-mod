@@ -53,14 +53,20 @@ func ToggleDebug(l *readline.Instance, log_level int8) {
 
 }
 
+var boot_timer int64 = globals.StartTime.Unix()
+
 func RunDiagnosticCheckSquence(chain *blockchain.Blockchain, l *readline.Instance) {
 
 	// when - this is check all the time so
 
-	if p2p.Peer_Count() <= 1 && time.Now().Unix() < globals.NextDiagnocticCheck+60 {
+	if p2p.Peer_Count() <= 10 && time.Now().Unix()-globals.StartTime.Unix() < 180 {
+
+		if time.Now().Unix()-boot_timer > 10 {
+			logger.Info("DERO System is still booting")
+			boot_timer = time.Now().Unix()
+		}
 		return
 	}
-
 	if time.Now().Unix() < globals.NextDiagnocticCheck {
 		return
 	}
@@ -69,20 +75,19 @@ func RunDiagnosticCheckSquence(chain *blockchain.Blockchain, l *readline.Instanc
 	}
 	globals.DiagnocticCheckRunning = true
 
-	w := l.Stdout()
-
 	var critical_errors []string
 	var peer_errors []string
 
-	// var warnings []string
-
-	// if globals.Uptime.Unix()+60 > time.Now().Unix() {
-	// 	time.Sleep(60 * time.Second)
-	// }
+	w := l.Stdout()
 
 	var old_debug_level = config.RunningConfig.LogLevel
-	io.WriteString(w, "\n* Diagnostics Sequence Initiated ... \n\n")
 	ToggleDebug(l, 0)
+
+	if old_debug_level > 0 {
+		time.Sleep(3 * time.Second)
+	}
+
+	io.WriteString(w, "\n* Diagnostics Sequence Initiated ... \n\n")
 	logger.Info("", "OS", runtime.GOOS, "ARCH", runtime.GOARCH, "GOMAXPROCS", runtime.GOMAXPROCS(0))
 	logger.Info("", "Version", config.Version.String())
 
@@ -155,6 +160,8 @@ func RunDiagnosticCheckSquence(chain *blockchain.Blockchain, l *readline.Instanc
 
 	}
 	ToggleDebug(l, 0)
+	time.Sleep(2 * time.Second)
+
 	logger.V(1).Info(fmt.Sprintf("Logging Current Stats: Current Peer Height (%d) - Our Height (%d)", best_height, our_height))
 	io.WriteString(w, "\n* Block Chain and Network Scan Finished ... \n")
 	io.WriteString(w, "\n* Processing results ... \n")
@@ -322,14 +329,7 @@ func RunDiagnosticCheckSquence(chain *blockchain.Blockchain, l *readline.Instanc
 		}
 	}
 
-	var total_peer_sending_error_count int = 0
-	var total_peer_receiving_error_count int = 0
-	var collision_count int = 0
-	for _, ps := range p2p.Pstat {
-		total_peer_sending_error_count += len(ps.Sending_Errors)
-		total_peer_receiving_error_count += len(ps.Receiving_Errors)
-		collision_count += len(ps.Collision_Errors)
-	}
+	total_peer_sending_error_count, total_peer_receiving_error_count, collision_count := p2p.PstatCount()
 
 	io.WriteString(w, "\n\n*** Captain, our diagnostic report ****\n\n")
 

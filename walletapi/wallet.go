@@ -16,24 +16,23 @@
 
 package walletapi
 
-import "fmt"
-import "sort"
-import "sync"
-import "strings"
-import "math/big"
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"sort"
+	"strings"
+	"sync"
 
-import "encoding/pem"
-import "encoding/binary"
-
-import "github.com/go-logr/logr"
-
-import "github.com/deroproject/derohe/rpc"
-import "github.com/deroproject/derohe/cryptography/crypto"
-import "github.com/deroproject/derohe/cryptography/bn256"
-
-import "github.com/deroproject/derohe/walletapi/mnemonics"
-import "github.com/deroproject/derohe/transaction"
+	"github.com/deroproject/derohe/cryptography/bn256"
+	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/rpc"
+	"github.com/deroproject/derohe/transaction"
+	"github.com/deroproject/derohe/walletapi/mnemonics"
+	"github.com/go-logr/logr"
+)
 
 //import "github.com/deroproject/derohe/blockchain/inputmaturity"
 

@@ -32,6 +32,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -121,15 +122,24 @@ func load_config_file() {
 	}
 	file, err := os.Open(config_file)
 	if err != nil {
-		logger.Error(err, "opening peer file")
+		logger.Error(err, "opening config file")
 	} else {
 		defer file.Close()
 		decoder := json.NewDecoder(file)
 		err = decoder.Decode(&config.RunningConfig)
 		if err != nil {
-			logger.Error(err, "Error loading config fom file")
-		} else { // successfully unmarshalled data
-			logger.V(1).Info("Successfully loaded config from file", "peer_count")
+			logger.Error(err, "Error loading config from file")
+		} else { // successfully loaded
+			logger.V(1).Info("Successfully loaded config from file")
+
+			// Set additional running variables based on config
+
+			p2p.Min_Peers = config.RunningConfig.Min_Peers
+			p2p.Max_Peers = config.RunningConfig.Max_Peers
+
+			if len(config.RunningConfig.NodeTag) > 0 {
+				p2p.SetNodeTag(config.RunningConfig.NodeTag)
+			}
 		}
 	}
 
@@ -151,11 +161,24 @@ func dump(filename string) {
 	}
 }
 
+var threadStartCount int
+var mutexStartCount int
+var blockingStartCount int
+var goStartCount int
+
 func main() {
+
+	// Setting upper limit to 100,000 to avoid immediate crashes
+	debug.SetMaxThreads(100000)
 
 	runtime.MemProfileRate = 0
 	var err error
 	globals.Arguments, err = docopt.Parse(command_line, nil, true, config.Version.String(), false)
+
+	threadStartCount = globals.CountThreads()
+	mutexStartCount = globals.CountMutex()
+	blockingStartCount = globals.CountBlocked()
+	goStartCount = globals.CountGoProcs()
 
 	if err != nil {
 		fmt.Printf("Error while parsing options err: %s\n", err)
@@ -250,6 +273,7 @@ func main() {
 	}
 
 	params["chain"] = chain
+	globals.BlockChainStartHeight = chain.Get_Height()
 
 	// since user is using a proxy, he definitely does not want to give out his IP
 	if globals.Arguments["--socks-proxy"] != nil {
@@ -261,12 +285,8 @@ func main() {
 	rpcserver, _ := derodrpc.RPCServer_Start(params)
 
 	i, err := strconv.ParseInt(os.Getenv("JOB_SEND_TIME_DELAY"), 10, 64)
-	if err != nil {
+	if err != nil && i > 0 {
 		config.RunningConfig.GETWorkJobDispatchTime = time.Duration(i * int64(time.Millisecond))
-	}
-
-	if config.RunningConfig.GETWorkJobDispatchTime.Milliseconds() < 40 {
-		config.RunningConfig.GETWorkJobDispatchTime = 500 * time.Millisecond
 	}
 
 	go derodrpc.Getwork_server()
@@ -318,6 +338,8 @@ func main() {
 	}
 	globals.Cron.Start() // start cron jobs
 
+	globals.Cron.AddFunc("@every 10s", derodrpc.UpdateMinerStats)
+	globals.Cron.AddFunc("@every 10s", p2p.UpdateLiveBlockData)
 	// This tiny goroutine continuously updates status as required
 	go func() {
 		last_our_height := int64(0)
@@ -475,8 +497,8 @@ restart_loop:
 
 		if err == readline.ErrInterrupt {
 			if len(line) == 0 {
-				logger.Info("Ctrl-C received, Exit in progress")
-				return nil
+				logger.Info("Ctrl-C received, to exit type - exit")
+				// return nil
 			} else {
 				continue
 			}
@@ -940,7 +962,11 @@ restart_loop:
 			hostname, _ := os.Hostname()
 			fmt.Printf("STATUS MENU for DERO HE Node - Hostname: %s\n\n", hostname)
 			fmt.Printf("Hostname: %s - Uptime: %s\n", hostname, time.Now().Sub(globals.StartTime).Round(time.Second).String())
-			fmt.Printf("Uptime Since: %s\n\n", globals.StartTime.Format(time.RFC1123))
+			fmt.Printf("Uptime Since: %s - Block: %d\n\n", globals.StartTime.Format(time.RFC1123), globals.BlockChainStartHeight)
+
+			fmt.Printf("DERO Daemon - Threads [%d/%d] - Mutex [%d/%d] - Blocked [%d/%d] - GO Procs [%d/%d]\n",
+				threadStartCount, globals.CountThreads(), mutexStartCount, globals.CountMutex(),
+				blockingStartCount, globals.CountBlocked(), goStartCount, globals.CountGoProcs())
 
 			fmt.Printf("Network %s Height %d  NW Hashrate %0.03f MH/sec  Peers %d inc, %d out  MEMPOOL size %d REGPOOL %d  Total Supply %s DERO \n", globals.Config.Name, chain.Get_Height(), float64(chain.Get_Network_HashRate())/1000000.0, inc, out, mempool_tx_count, regpool_tx_count, globals.FormatMoney(supply))
 
@@ -974,13 +1000,25 @@ restart_loop:
 
 			fmt.Print("\nPeer Stats:\n")
 			fmt.Printf("\tPeer ID: %d\n", p2p.GetPeerID())
+			fmt.Printf("\tNode Tag: %s\n", p2p.GetNodeTag())
 
 			blocksMinted := (derodrpc.CountMinisAccepted + derodrpc.CountBlocks)
 			fmt.Print("\nMining Stats:\n")
 			fmt.Printf("\tBlock Minted: %d (MB+IB)\n", blocksMinted)
 			if blocksMinted > 0 {
-				fmt.Printf("\tMinting Velocity: %.4f MB/h\t%.4f MB/d (since uptime)\n", float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds())*3600,
-					float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds())*3600*24)
+
+				velocity_1h := float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600
+				if velocity_1h > float64(blocksMinted) {
+					velocity_1h = float64(blocksMinted)
+				}
+
+				velocity_1d := float64(float64(blocksMinted)/time.Now().Sub(globals.StartTime).Seconds()) * 3600 * 24
+				if velocity_1d > float64(blocksMinted) {
+					velocity_1d = float64(blocksMinted)
+				}
+
+				fmt.Printf("\tMinting Velocity: %.4f MB/h\t%.4f MB/d (since uptime)\n", velocity_1h, velocity_1d)
+
 			} else {
 				fmt.Print("\tMinting Velocity: 0.0000 MB/h\t0.0000MB/d (since uptime)\n")
 			}
@@ -1049,7 +1087,7 @@ restart_loop:
 			hostname, _ := os.Hostname()
 
 			fmt.Printf("Hostname: %s - Uptime: %s\n", hostname, time.Now().Sub(globals.StartTime).Round(time.Second).String())
-			fmt.Printf("Uptime Since: %s\n\n", globals.StartTime.Format(time.RFC1123))
+			fmt.Printf("Uptime Since: %s - Block: %d\n\n", globals.StartTime.Format(time.RFC1123), globals.BlockChainStartHeight)
 
 		case command == "ban_above_height":
 
@@ -1069,30 +1107,194 @@ restart_loop:
 				result, err := derodrpc.AddressToName(nil, rpc.AddressToName_Params{Address: line_parts[1], TopoHeight: -1})
 
 				if err == nil {
-					fmt.Printf("Address: %s has following names:\n", line_parts[1])
+					fmt.Printf("\nAddress: %s has following names:\n", line_parts[1])
 					for _, name := range result.Names {
 						fmt.Printf("\t%s\n", name)
 					}
 					fmt.Print("\n")
 				} else {
-					fmt.Printf("Something went wrong, could not look up name address: %s (%s)\n", line_parts[1], err.Error())
+					fmt.Printf("\nAddress: %s (%s)\n\n", line_parts[1], err.Error())
 				}
 			} else {
 				fmt.Printf("usage: address_to_name <wallet address>\n")
 			}
 
-		case command == "connecto_to_peer":
+		case command == "active_nodes":
+
+			active_nodes := p2p.GetActiveNodesFromHeight(chain.Get_Height() - config.RunningConfig.NetworkStatsKeepCount)
+
+			var ordered_nodes []string
+
+			for node, _ := range active_nodes {
+
+				ordered_nodes = append(ordered_nodes, node)
+			}
+
+			sort.SliceStable(ordered_nodes, func(i, j int) bool {
+				return active_nodes[ordered_nodes[i]]["total"] > active_nodes[ordered_nodes[j]]["total"]
+			})
+
+			show_count := 25
+			if len(line_parts) == 2 {
+
+				i, err := strconv.ParseInt(line_parts[1], 10, 64)
+				if err != nil {
+					io.WriteString(l.Stderr(), "usage: active_nodes <show count - default 25>\n")
+				} else {
+					show_count = int(i)
+				}
+			}
+
+			if show_count > len(active_nodes) {
+				show_count = len(active_nodes)
+			}
+
+			height := chain.Get_Height()
+			keep_blocks := config.RunningConfig.NetworkStatsKeepCount
+			keep_string := fmt.Sprintf("Last %d Blocks", config.RunningConfig.NetworkStatsKeepCount)
+			if (height - globals.BlockChainStartHeight) < config.RunningConfig.NetworkStatsKeepCount {
+				keep_blocks = height - globals.BlockChainStartHeight
+				keep_string = fmt.Sprintf("Last %d/%d Blocks", keep_blocks, config.RunningConfig.NetworkStatsKeepCount)
+			}
+			fmt.Printf("Network Mining Node Stats - %s - Showing %d/%d nodes\n\n", keep_string, show_count, len(active_nodes))
+			fmt.Printf("%-30s %-8s %-8s %-8s %-14s %-16s\n", "Node IP", "IB", "MB", "MBO", "Orphan Loss", "Dominance")
+
+			ib, mb := p2p.GetBlockLogLenght()
+
+			total_blocks := float64(ib + mb)
+			count := 0
+			for _, node := range ordered_nodes {
+				if count >= show_count {
+					break
+				}
+
+				node_total_blocks := float64(active_nodes[node]["finals"] + active_nodes[node]["minis"])
+				dominance := fmt.Sprintf("%.2f%%", ((node_total_blocks / total_blocks) * 100))
+				orphan_loss := fmt.Sprintf("%.2f%%", (float64(active_nodes[node]["orphans"]) / float64(active_nodes[node]["total"]) * 100))
+				fmt.Printf("%-30s %-8d %-8d %-8d %-14s %-16s\n", node, active_nodes[node]["finals"], active_nodes[node]["minis"], active_nodes[node]["orphans"], orphan_loss, dominance)
+				count++
+			}
+
+			fmt.Printf("\nTotal Active Miner Node(s): %d\n", len(active_nodes))
+
+		case command == "active_miners":
+
+			active_miners := p2p.GetActiveMinersFromHeight(chain.Get_Height() - config.RunningConfig.NetworkStatsKeepCount)
+
+			var ordered_minder []string
+
+			for node, _ := range active_miners {
+
+				ordered_minder = append(ordered_minder, node)
+			}
+
+			sort.SliceStable(ordered_minder, func(i, j int) bool {
+				return active_miners[ordered_minder[i]]["total"] > active_miners[ordered_minder[j]]["total"]
+			})
+
+			show_count := 25
+			if len(line_parts) == 2 {
+
+				i, err := strconv.ParseInt(line_parts[1], 10, 64)
+				if err != nil {
+					io.WriteString(l.Stderr(), "usage: active_miners <show count - default 25>\n")
+				} else {
+					show_count = int(i)
+				}
+			}
+
+			if show_count > len(active_miners) {
+				show_count = len(active_miners)
+			}
+
+			height := chain.Get_Height()
+			keep_blocks := config.RunningConfig.NetworkStatsKeepCount
+			keep_string := fmt.Sprintf("Last %d Blocks", config.RunningConfig.NetworkStatsKeepCount)
+			if (height - globals.BlockChainStartHeight) < config.RunningConfig.NetworkStatsKeepCount {
+				keep_blocks = height - globals.BlockChainStartHeight
+				keep_string = fmt.Sprintf("Last %d/%d Blocks", keep_blocks, config.RunningConfig.NetworkStatsKeepCount)
+			}
+
+			fmt.Printf("Network Mining Stats - %s - Showing %d/%d miners\n\n", keep_string, show_count, len(active_miners))
+
+			fmt.Printf("%-76s %-8s %-8s %-8s %-14s %-16s %-26s\n", "Miner Address", "IB", "MB", "MBO", "Orphan Loss", "Dominance", "Node (Probability)")
+
+			var count int = 0
+			for _, miner := range ordered_minder {
+				if count >= show_count {
+					break
+				}
+
+				dominance := fmt.Sprintf("%.02f%%", (float64(active_miners[miner]["total"]) / (10 * float64(keep_blocks)) * 100))
+				node, probabiliy := p2p.BestGuessMinerNodeHeight((chain.Get_Height() - config.RunningConfig.NetworkStatsKeepCount), miner)
+
+				orphan_loss := float64(float64(active_miners[miner]["orphans"]) / float64(active_miners[miner]["total"]) * 100)
+
+				node_string := fmt.Sprintf("%-16s (%.2f%%)", node, probabiliy)
+				orphan_string := fmt.Sprintf("%.2f%%", orphan_loss)
+				fmt.Printf("%-76s %-8d %-8d %-8d %-14s %-16s %-26s\n", miner, active_miners[miner]["finals"], active_miners[miner]["minis"], active_miners[miner]["orphans"], orphan_string, dominance, node_string)
+				count++
+
+			}
+
+			fmt.Printf("\nTotal Active Miner(s): %d\n", len(active_miners))
+
+		case command == "connect_to_peer":
 
 			if len(line_parts) == 2 {
+				logger.Info(fmt.Sprintf("Connecting to: %s", line_parts[1]))
+
 				address := line_parts[1]
 				p2p.ConnecToNode(address)
 			} else {
-				fmt.Printf("usage: connecto_to_peer <ip address:port>\n")
+				fmt.Printf("usage: connect_to_peer <ip address:port>\n")
+			}
+
+		case command == "disconnect_peer":
+
+			if len(line_parts) == 2 {
+				address := line_parts[1]
+				p2p.DisconnectAddress(address)
+			} else {
+				fmt.Printf("usage: disconnect_peer <ip address>\n")
 			}
 
 		case command == "miner_info":
 
 			if len(line_parts) == 2 {
+
+				active_miners := p2p.GetActiveMinersFromHeight(chain.Get_Height() - config.RunningConfig.NetworkStatsKeepCount)
+				height := chain.Get_Height()
+				keep_blocks := config.RunningConfig.NetworkStatsKeepCount
+				keep_string := fmt.Sprintf("Last %d Blocks", config.RunningConfig.NetworkStatsKeepCount)
+				if (height - globals.BlockChainStartHeight) < config.RunningConfig.NetworkStatsKeepCount {
+					keep_blocks = height - globals.BlockChainStartHeight
+					keep_string = fmt.Sprintf("Last %d/%d Blocks", keep_blocks, config.RunningConfig.NetworkStatsKeepCount)
+				}
+				fmt.Printf("Network Mining Stats Since %s\n\n", keep_string)
+				for miner, _ := range active_miners {
+					if miner != line_parts[1] {
+						continue
+					}
+
+					fmt.Printf("%-76s %-16s %-16s %-16s %-24s\n", "Miner", "IB", "MB", "MBO", "Dominance")
+					dominance := fmt.Sprintf("%.02f%%", (float64(active_miners[miner]["total"]) / (10 * float64(keep_blocks)) * 100))
+
+					orphan_loss := float64(float64(active_miners[miner]["orphans"]) / float64(active_miners[miner]["total"]) * 100)
+					orphan_string := fmt.Sprintf("%.2f%%", orphan_loss)
+
+					fmt.Printf("%-76s %-16d %-16d %-16d %-24s\n", miner, active_miners[miner]["finals"], active_miners[miner]["minis"], active_miners[miner]["orphans"], dominance)
+
+					ordered_nodes, data := p2p.PotentialMinerNodeHeight((chain.Get_Height() - 100), miner)
+					fmt.Print("\nPotential Miner Nodes:\n")
+					fmt.Printf("%-24s %-8s %-8s %-8s %-14s %-16s\n", "Node", "IB", "MB", "MBO", "Orphan Loss", "Probability")
+
+					for _, node := range ordered_nodes {
+						fmt.Printf("%-24s %-8d %-8d %-8d %-14s %.2f%%\n", node, int(data[node]["finals"]), int(data[node]["minis"]), int(data[node]["orphans"]), orphan_string, data[node]["likelyhood"])
+					}
+
+				}
+				fmt.Print("\n")
 				derodrpc.ShowMinerInfo(line_parts[1])
 			} else {
 				fmt.Printf("usage: miner_info <wallet address/ip>\n")
@@ -1108,19 +1310,21 @@ restart_loop:
 
 			fmt.Printf("%-72s %-32s %-12s %s\n\n", "Wallet", "IP Address", "Height", "Block")
 
+			MyOrphanBlocks := block.GetMyOrphansList()
+
 			count := 0
-			for miner, _ := range block.MyOrphanBlocks {
+			for miner, _ := range MyOrphanBlocks {
 
 				wallet := derodrpc.GetMinerWallet(miner)
 
-				for _, mbl := range block.MyOrphanBlocks[miner] {
-					hash, err := chain.Load_Block_Topological_order_at_index(int64(mbl.Height))
+				for _, height := range MyOrphanBlocks[miner] {
+					hash, err := chain.Load_Block_Topological_order_at_index(int64(height))
 					if err != nil {
-						fmt.Printf("Skipping block at topo height %d due to error %s\n", mbl.Height, err)
+						fmt.Printf("Skipping block at topo height %d due to error %s\n", height, err)
 
 					} else {
 
-						fmt.Printf("%-72s %-32s %-12d %s\n", wallet, miner, mbl.Height, hash)
+						fmt.Printf("%-72s %-32s %-12d %s\n", wallet, miner, height, hash)
 					}
 					count++
 
@@ -1163,8 +1367,40 @@ restart_loop:
 			var error_peer string
 
 			if len(line_parts) == 2 {
-				error_peer = line_parts[1]
+				error_peer = p2p.ParseIPNoError(line_parts[1])
 				p2p.Print_Peer_Info(error_peer)
+
+				integrators, integrator_data := p2p.PotentialNodeIntegratorsFromHeight(chain.Get_Height()-config.RunningConfig.NetworkStatsKeepCount, error_peer)
+
+				height := chain.Get_Height()
+				keep_blocks := config.RunningConfig.NetworkStatsKeepCount
+				keep_string := fmt.Sprintf("Last %d Blocks", config.RunningConfig.NetworkStatsKeepCount)
+				if (height - globals.BlockChainStartHeight) < config.RunningConfig.NetworkStatsKeepCount {
+					keep_blocks = height - globals.BlockChainStartHeight
+					keep_string = fmt.Sprintf("Last %d/%d Blocks", keep_blocks, config.RunningConfig.NetworkStatsKeepCount)
+				}
+				fmt.Printf("\nPotential Integrators - %s\n\n", keep_string)
+
+				fmt.Printf("%-76s %-16s %-24s\n", "Miner Address", "IB", "% of Total")
+
+				for _, miner := range integrators {
+
+					fmt.Printf("%-76s %-16d %0.2f%%\n", miner, int(integrator_data[miner]["finals"]), integrator_data[miner]["likelyhood"])
+
+				}
+
+				ordered_miner, data := p2p.PotentialMinersOnNodeFromHeight(chain.Get_Height()-config.RunningConfig.NetworkStatsKeepCount, error_peer)
+
+				fmt.Printf("\nPotential Miners - %s\n\n", keep_string)
+
+				fmt.Printf("%-76s %-16s %-16s %-16s %-24s\n", "Miner Address", "IB", "MB", "MBO", "% of Total")
+
+				for _, miner := range ordered_miner {
+
+					fmt.Printf("%-76s %-16d %-16d %-16d %0.2f%%\n", miner, int(data[miner]["finals"]), int(data[miner]["minis"]), int(data[miner]["orphans"]), data[miner]["likelyhood"])
+
+				}
+				fmt.Print("\n")
 			} else {
 				fmt.Printf("usage: peer_info <ip address>\n")
 			}
@@ -1197,8 +1433,22 @@ restart_loop:
 						p2p.Min_Peers = i
 						if p2p.Max_Peers < p2p.Min_Peers {
 							p2p.Max_Peers = p2p.Min_Peers
+							config.RunningConfig.Max_Peers = p2p.Max_Peers
 						}
 						config.RunningConfig.Min_Peers = p2p.Min_Peers
+
+					}
+				}
+				if line_parts[1] == "max_peers" && len(line_parts) == 3 {
+					i, err := strconv.ParseInt(line_parts[2], 10, 64)
+					if err != nil {
+						io.WriteString(l.Stderr(), "max peers need to be number\n")
+					} else {
+						p2p.Max_Peers = i
+						if p2p.Min_Peers > p2p.Max_Peers {
+							p2p.Min_Peers = p2p.Max_Peers
+							config.RunningConfig.Min_Peers = p2p.Min_Peers
+						}
 						config.RunningConfig.Max_Peers = p2p.Max_Peers
 					}
 				}
@@ -1209,6 +1459,16 @@ restart_loop:
 						io.WriteString(l.Stderr(), "peer_log_expiry time need to be in seconds\n")
 					} else {
 						config.RunningConfig.ErrorLogExpirySeconds = i
+
+					}
+				}
+
+				if line_parts[1] == "network_stats_keep" && len(line_parts) == 3 {
+					i, err := strconv.ParseInt(line_parts[2], 10, 64)
+					if err != nil {
+						io.WriteString(l.Stderr(), "network_stats_keep <amount of blocks to keep>\n")
+					} else {
+						config.RunningConfig.NetworkStatsKeepCount = i
 
 					}
 				}
@@ -1279,6 +1539,16 @@ restart_loop:
 				if line_parts[1] == "operator" && len(line_parts) == 3 {
 					config.RunningConfig.OperatorName = line_parts[2]
 				}
+				if line_parts[1] == "node_tag" {
+					new_tag := ""
+					for i := 2; i < len(line_parts); i++ {
+						new_tag = fmt.Sprintf("%s %s", new_tag, line_parts[i])
+					}
+
+					new_tag = strings.TrimLeft(new_tag, " ")
+					new_tag = strings.TrimRight(new_tag, " ")
+					p2p.SetNodeTag(new_tag)
+				}
 				save_config_file()
 			}
 
@@ -1286,15 +1556,32 @@ restart_loop:
 			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20s %-20s\n\n", "Option", "Value", "How to change"))
 
 			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20s %-20s\n", "Operator Name", config.RunningConfig.OperatorName, "config operator <name>"))
+
 			whitelist_incoming := "YES"
 			if !config.RunningConfig.WhitelistIncoming {
-				whitelist_incoming = "no"
+				whitelist_incoming = "NO"
 			}
 			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20s %-20s\n", "Whitelist Incoming Peers", whitelist_incoming, "config whitelist_incoming"))
 
-			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20d %-20s\n", "P2P Min Peers", p2p.Min_Peers, "config min_peers <num>"))
+			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20s %-20s\n", "P2P Node Tag", p2p.GetNodeTag(), "config node_tag <Tag or none to remove>"))
 
-			turbo := "off"
+			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20d %-20s\n", "P2P Min Peers", p2p.Min_Peers, "config min_peers <num>"))
+			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20d %-20s\n", "P2P Max Peers", p2p.Max_Peers, "config max_peers <num>"))
+
+			blid, _ := chain.Load_Block_Topological_order_at_index(chain.Get_Height())
+			blid50, _ := chain.Load_Block_Topological_order_at_index(chain.Get_Height() - 50)
+
+			now := chain.Load_Block_Timestamp(blid)
+			now50 := chain.Load_Block_Timestamp(blid50)
+			AverageBlockTime50 := float32(now-now50) / (50.0 * 1000)
+			seconds := AverageBlockTime50 * float32(config.RunningConfig.NetworkStatsKeepCount)
+			blocksavetime := time.Duration(seconds * float32(time.Second)).Round(time.Millisecond)
+
+			network_stats := fmt.Sprintf("%d (%s)", config.RunningConfig.NetworkStatsKeepCount, blocksavetime)
+
+			io.WriteString(l.Stdout(), fmt.Sprintf("\t%-60s %-20s %-20s\n", "Network Block To Keep for Stats", network_stats, "config network_stats_keep <blocks count>"))
+
+			turbo := "OFF"
 			if config.RunningConfig.P2PTurbo {
 				turbo = "ON"
 			}
@@ -1341,6 +1628,10 @@ restart_loop:
 				fmt.Printf("usage: remove_trusted <ip address>\n")
 			}
 
+		case command == "show_selfish":
+
+			p2p.Show_Selfish_Peers()
+
 		case command == "list_trusted":
 
 			p2p.Print_Trusted_Peers()
@@ -1371,10 +1662,6 @@ restart_loop:
 				fmt.Printf("usage: clear_peer_stats <ip address>\n")
 			}
 
-		case command == "list_all_connections": // print peer list
-
-			go p2p.ListAllConnections()
-
 		case command == "peer_list": // print peer list
 
 			limit := int64(25)
@@ -1392,7 +1679,10 @@ restart_loop:
 		case strings.ToLower(line) == "bye":
 			fallthrough
 		case strings.ToLower(line) == "exit":
-			fallthrough
+			close(Exit_In_Progress)
+
+			return nil
+
 		case strings.ToLower(line) == "quit":
 			close(Exit_In_Progress)
 			return nil
@@ -1512,16 +1802,6 @@ restart_loop:
 				fmt.Printf("err unbanning %s, err = %s", line_parts[1], err)
 			} else {
 				fmt.Printf("unbann %s successful", line_parts[1])
-			}
-
-		case command == "connect_to_peer":
-
-			if len(line_parts) == 2 {
-
-				logger.Info(fmt.Sprintf("Connecting to: %s", line_parts[1]))
-				go p2p.ConnecToNode(line_parts[1])
-			} else {
-				fmt.Printf("usage: clear_peer_stats <ip address>\n")
 			}
 
 		case command == "connect_to_seeds":
@@ -1699,12 +1979,14 @@ func usage(w io.Writer) {
 	io.WriteString(w, "\t\033[1mconnect_to_hansen\033[0m\tConnect to Hansen nodes\n")
 	io.WriteString(w, "\t\033[1mconnect_to_seeds\033[0m\tConnect to all seed nodes (see status in list_trusted)\n")
 	io.WriteString(w, "\t\033[1mconnect_to_peer\033[0m\tConnect to any peer using - connect_to_peer <ip:p2p-port>\n")
+	io.WriteString(w, "\t\033[1mdisconnect_peer\033[0m\tConnect to any peer using - disconnect_peer <ip>\n")
 	io.WriteString(w, "\t\033[1mlist_miners\033[0m\tShow Connected Miners\n")
 	io.WriteString(w, "\t\033[1mminer_info\033[0m\tDetailed miner info - miner_info <wallet>\n")
 	io.WriteString(w, "\t\033[1mmined_blocks\033[0m\tList Mined Blocks\n")
 	io.WriteString(w, "\t\033[1morphaned_blocks\033[0m\tList Our Orphaned Blocks\n")
 	io.WriteString(w, "\t\033[1maddress_to_name\033[0m\tLookup registered names for Address\n")
 	io.WriteString(w, "\t\033[1mlist_all_connections\033[0m\tList All Connection\n")
+	io.WriteString(w, "\t\033[1mshow_selfish\033[0m\tShow Nodes that don't play nice\n")
 
 }
 
@@ -1748,13 +2030,17 @@ var completer = readline.NewPrefixCompleter(
 	readline.PcItem("remove_trusted"),
 	readline.PcItem("list_trusted"),
 	readline.PcItem("connect_to_peer"),
+	readline.PcItem("disconnect_peer"),
 	readline.PcItem("connect_to_seeds"),
 	readline.PcItem("list_miners"),
+	readline.PcItem("active_miners"),
+	readline.PcItem("active_nodes"),
 	readline.PcItem("miner_info"),
 	readline.PcItem("mined_blocks"),
 	readline.PcItem("orphaned_blocks"),
 	readline.PcItem("address_to_name"),
 	readline.PcItem("list_all_connections"),
+	readline.PcItem("show_selfish"),
 )
 
 func filterInput(r rune) (rune, bool) {

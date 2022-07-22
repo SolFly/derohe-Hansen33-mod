@@ -132,6 +132,18 @@ type (
 		Rejected           uint64 `json:"rejected"`   // reject count
 		LastError          string `json:"lasterror"`  // last error
 		Status             string `json:"status"`
+		Orphans            uint64 `json:"orphans"`
+		Hansen33Mod        bool   `json:"hansen33_mod"`
+	}
+)
+
+type ( // array without name containing block template in hex
+	MinerInfo_Params struct {
+		Wallet_Address string  `json:"wallet_address"`
+		Miner_Tag      string  `json:"miner_tag"`
+		Miner_Hashrate float64 `json:"miner_hashrate"`
+	}
+	MinerInfo_Result struct {
 	}
 )
 
@@ -326,18 +338,22 @@ type (
 		RemotePopBlockCount          int64   `json:"remote_pop_block_count"`
 		SameHeightChainExtendedCount int     `json:"same_height_chain_extended_count"`
 
-		CountBlocks           int64   `json:"blocks_count"`
-		CountMinisAccepted    int64   `json:"miniblocks_accepted_count"`
-		CountMinisRejected    int64   `json:"miniblocks_rejected_count"`
-		CountMinisOrphaned    int64   `json:"miniblocks_orphaned_count"`
-		MintingSuccessRate    float64 `json:"minting_success_rate"`
-		Minting_Velocity_1hr  float64 `json:"minting_velocity_1hr"`
-		Minting_Velocity_1day float64 `json:"minting_velocity_1day"`
-		Uptime                uint64  `json:"uptime"`
-
-		HashrateEstimatePercent_1hr  uint64 `json:"hashrate_1hr"`
-		HashrateEstimatePercent_1day uint64 `json:"hashrate_1d"`
-		HashrateEstimatePercent_7day uint64 `json:"hashrate_7d"`
+		CountBlocks                  int64   `json:"blocks_count"`
+		CountMinisAccepted           int64   `json:"miniblocks_accepted_count"`
+		CountMinisRejected           int64   `json:"miniblocks_rejected_count"`
+		CountMinisOrphaned           int64   `json:"miniblocks_orphaned_count"`
+		MintingSuccessRate           float64 `json:"minting_success_rate"`
+		Minting_Velocity_1hr         float64 `json:"minting_velocity_1hr"`
+		Minting_Velocity_1day        float64 `json:"minting_velocity_1day"`
+		Uptime                       uint64  `json:"uptime"`
+		CountThreads                 int     `json:"count_threads"`
+		CountBlocked                 int     `json:"count_blocked"`
+		CountMutex                   int     `json:"count_mutex"`
+		CountGoProcs                 int     `json:"count_goprocs"`
+		NetworkActiveMiners          int     `json:"network_active_miners"`
+		HashrateEstimatePercent_1hr  uint64  `json:"hashrate_1hr"`
+		HashrateEstimatePercent_1day uint64  `json:"hashrate_1d"`
+		HashrateEstimatePercent_7day uint64  `json:"hashrate_7d"`
 
 		Status string `json:"status"`
 	}

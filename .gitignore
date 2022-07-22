@@ -2,5 +2,7 @@ cmd/dero-miner/dero-miner
 cmd/derod/derod
 cmd/dero-wallet-cli/dero-wallet-cli
 cmd/*/*.log
+cmd/*/*.txt
 cmd/*/history/
 cmd/*/history/*
+cmd/dero-wallet-cli/*.db*

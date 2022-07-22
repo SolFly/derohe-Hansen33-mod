@@ -54,10 +54,13 @@ type user_session struct {
 	blocks        uint64
 	miniblocks    uint64
 	rejected      uint64
+	orphans       uint64
 	lasterr       string
 	address       rpc.Address
 	valid_address bool
 	address_sum   [32]byte
+	hashrate      float64
+	tag           string
 }
 
 type banned struct {
@@ -131,6 +134,7 @@ func CountMiners() int {
 	defer cleanup()
 	client_list_mutex.Lock()
 	defer client_list_mutex.Unlock()
+
 	miners_count = len(client_list)
 	return miners_count
 }
@@ -149,6 +153,9 @@ type inner_miner_stats struct {
 	rejected   uint64
 	orphaned   uint64
 	address    string
+	hashrate   float64
+	tag        string
+	lasterr    string
 }
 
 var miner_stats_mutex sync.Mutex
@@ -181,26 +188,40 @@ func UpdateMinerStats() {
 
 	for conn, sess := range client_list {
 
+		conn_address := conn.RemoteAddr().String()
 		unique_miners[sess.address.String()]++
 
+		for addr, stat := range miner_stats {
+			if addr != conn_address && stat.tag == sess.tag && len(sess.tag) > 0 {
+				sess.blocks += stat.blocks
+				sess.miniblocks += stat.miniblocks
+				sess.orphans += stat.orphaned
+				delete(miner_stats, addr)
+			}
+		}
+
 		// use address with port for uniqueness - could have more than one miner behind same IP but mining to different addresses
-		i := miner_stats[conn.RemoteAddr().String()]
+		i := miner_stats[conn_address]
 
 		i.blocks = sess.blocks
 		i.miniblocks = sess.miniblocks
 		i.rejected = sess.rejected
-
-		_, found := block.MyOrphanBlocks[conn.RemoteAddr().String()]
-		if found {
-			i.orphaned = uint64(len(block.MyOrphanBlocks[conn.RemoteAddr().String()]))
-		} else {
-			i.orphaned = 0
+		i.tag = sess.tag
+		i.hashrate = sess.hashrate
+		if len(sess.lasterr) > 0 {
+			i.lasterr = sess.lasterr
 		}
 
-		i.address = fmt.Sprintf("%s", sess.address)
+		orphan_count := block.GetMinerOrphanCount(conn_address)
 
-		miner_stats[conn.RemoteAddr().String()] = i
+		i.orphaned = orphan_count
+		sess.orphans = orphan_count
 
+		client_list[conn] = sess
+		i.address = sess.address.String()
+
+		miner_stats[conn_address] = i
+		client_list[conn] = sess
 	}
 
 	CountUniqueMiners = int64(len(unique_miners))
@@ -208,11 +229,11 @@ func UpdateMinerStats() {
 	// reset counter
 	CountMinisOrphaned = 0
 	for miner := range miner_stats {
-		_, found := block.MyOrphanBlocks[miner]
-		if found {
-			CountMinisOrphaned += int64(len(block.MyOrphanBlocks[miner]))
-		}
+		orphan_count := block.GetMinerOrphanCount(miner)
+		CountMinisOrphaned += int64(orphan_count)
 	}
+
+	globals.BlocksMined = (CountMinisAccepted + CountBlocks) - CountMinisOrphaned
 }
 
 func MinerIsConnected(ip_address string) bool {
@@ -231,7 +252,9 @@ func MinerIsConnected(ip_address string) bool {
 
 func ShowMinerInfo(wallet string) {
 
-	fmt.Print("Miner Info\n\n")
+	UpdateMinerStats()
+
+	fmt.Print("Local Miner Info\n\n")
 
 	miner_stats_mutex.Lock()
 	defer miner_stats_mutex.Unlock()
@@ -245,7 +268,7 @@ func ShowMinerInfo(wallet string) {
 
 		if count == 0 {
 			fmt.Printf("Miner Wallet: %s\n\n", stat.address)
-			fmt.Printf("%-32s %-12s %-12s %-12s %-12s %-12s %-12s\n\n", "IP Address", "Connected", "Blocks", "Mini Blocks", "Rejected", "Orphan", "Success Rate")
+			fmt.Printf("%-32s %-12s %-12s %-12s %-12s %-12s %-12s %-12s %-12s\n\n", "IP Address", "Tag", "Connected", "Hashrate", "Blocks", "Mini Blocks", "Rejected", "Orphan", "Success Rate")
 		}
 		count++
 
@@ -257,18 +280,32 @@ func ShowMinerInfo(wallet string) {
 			miners_connected++
 		}
 
-		good_blocks := stat.blocks + stat.miniblocks
-		bad_blocks := stat.rejected + stat.orphaned
+		total_blocks := float64(stat.blocks + stat.miniblocks + stat.rejected)
+		bad_blocks := float64(stat.rejected + stat.orphaned)
 
 		success_rate := float64(100)
 
-		if bad_blocks >= 1 {
+		if bad_blocks >= 1 && total_blocks >= 1 {
+			success_rate = float64(100 - (float64(bad_blocks/total_blocks) * 100))
+		} else if bad_blocks >= 1 {
+			success_rate = float64(0)
+		}
+		hash_rate_string := ""
 
-			success_rate = float64(100 - float64(float64(float64(bad_blocks)/float64(good_blocks)*100)))
-
+		switch {
+		case stat.hashrate > 1000000000000:
+			hash_rate_string = fmt.Sprintf("%.3f TH/s", float64(stat.hashrate)/1000000000000.0)
+		case stat.hashrate > 1000000000:
+			hash_rate_string = fmt.Sprintf("%.3f GH/s", float64(stat.hashrate)/1000000000.0)
+		case stat.hashrate > 1000000:
+			hash_rate_string = fmt.Sprintf("%.3f MH/s", float64(stat.hashrate)/1000000.0)
+		case stat.hashrate > 1000:
+			hash_rate_string = fmt.Sprintf("%.3f KH/s", float64(stat.hashrate)/1000.0)
+		case stat.hashrate > 0:
+			hash_rate_string = fmt.Sprintf("%d H/s", int(stat.hashrate))
 		}
 
-		fmt.Printf("%-32s %-12s %-12d %-12d %-12d %-12d %.2f\n", ip_address, is_connected, stat.blocks, stat.miniblocks, stat.rejected, stat.orphaned, success_rate)
+		fmt.Printf("%-32s %-12s %-12s %-12s %-12d %-12d %-12d %-12d %.2f\n", ip_address, stat.tag, is_connected, hash_rate_string, stat.blocks, stat.miniblocks, stat.rejected, stat.orphaned, success_rate)
 
 	}
 
@@ -284,7 +321,8 @@ type miner_counter struct {
 	rejected         uint64
 	orphaned         uint64
 	is_connected     string
-	address          rpc.Address
+	hashrate         float64
+	lasterr          string
 }
 
 func ListMiners() {
@@ -296,13 +334,20 @@ func ListMiners() {
 	defer miner_stats_mutex.Unlock()
 
 	for ip_address, stat := range miner_stats {
-		i := miners[fmt.Sprintf("%s", stat.address)]
+		i := miners[stat.address]
 
 		i.blocks += stat.blocks
 		i.miniblocks += stat.miniblocks
 		i.rejected += stat.rejected
 		i.orphaned += stat.orphaned
 		i.miners++
+		if len(stat.lasterr) > 0 {
+			i.lasterr = stat.lasterr
+		}
+
+		if MinerIsConnected(ip_address) {
+			i.hashrate += stat.hashrate
+		}
 
 		if MinerIsConnected(ip_address) {
 			i.is_connected = "yes"
@@ -310,12 +355,12 @@ func ListMiners() {
 		} else if i.is_connected != "yes" {
 			i.is_connected = "no"
 		}
-		miners[fmt.Sprintf("%s", stat.address)] = i
+		miners[stat.address] = i
 	}
 
 	fmt.Print("Connected Miners\n\n")
 
-	fmt.Printf("%-72s %-10s %-12s %-12s %-12s %-12s %-12s %-12s\n\n", "Wallet", "Connected", "Miners", "Blocks", "Mini Blocks", "Rejected", "Orphan", "Success Rate")
+	fmt.Printf("%-72s %-10s %-12s %-12s %-12s %-12s %-12s %-12s %-14s %-12s\n\n", "Wallet", "Connected", "Miners", "Hashrate", "Blocks", "Mini Blocks", "Rejected", "Orphan", "Success Rate", "Last Error")
 
 	for wallet, stat := range miners {
 
@@ -324,18 +369,35 @@ func ListMiners() {
 			miners_connected_str = fmt.Sprintf("%d/%d", stat.miners_connected, stat.miners)
 		}
 
-		good_blocks := stat.blocks + stat.miniblocks
-		bad_blocks := stat.rejected + stat.orphaned
+		total_blocks := float64(stat.blocks + stat.miniblocks + stat.rejected)
+		bad_blocks := float64(stat.rejected + stat.orphaned)
 
 		success_rate := float64(100)
 
-		if bad_blocks >= 1 {
-
-			success_rate = float64(100 - float64(float64(float64(bad_blocks)/float64(good_blocks)*100)))
-
+		if bad_blocks >= 1 && total_blocks >= 1 {
+			success_rate = float64(100 - (float64(bad_blocks/total_blocks) * 100))
+		} else if bad_blocks >= 1 {
+			success_rate = float64(0)
 		}
 
-		fmt.Printf("%-72s %-10s %-12s %-12d %-12d %-12d %-12d %.2f\n", wallet, stat.is_connected, miners_connected_str, stat.blocks, stat.miniblocks, stat.rejected, stat.orphaned, success_rate)
+		hash_rate_string := ""
+
+		switch {
+		case stat.hashrate > 1000000000000:
+			hash_rate_string = fmt.Sprintf("%.3f TH/s", float64(stat.hashrate)/1000000000000.0)
+		case stat.hashrate > 1000000000:
+			hash_rate_string = fmt.Sprintf("%.3f GH/s", float64(stat.hashrate)/1000000000.0)
+		case stat.hashrate > 1000000:
+			hash_rate_string = fmt.Sprintf("%.3f MH/s", float64(stat.hashrate)/1000000.0)
+		case stat.hashrate > 1000:
+			hash_rate_string = fmt.Sprintf("%.3f KH/s", float64(stat.hashrate)/1000.0)
+		case stat.hashrate > 0:
+			hash_rate_string = fmt.Sprintf("%d H/s", int(stat.hashrate))
+		}
+
+		success_rate_str := fmt.Sprintf("%.2f%%", success_rate)
+
+		fmt.Printf("%-72s %-10s %-12s %-12s %-12d %-12d %-12d %-12d %-14s %-12s\n", wallet, stat.is_connected, miners_connected_str, hash_rate_string, stat.blocks, stat.miniblocks, stat.rejected, stat.orphaned, success_rate_str, stat.lasterr)
 
 	}
 
@@ -378,6 +440,7 @@ func SendJob() {
 			params.Prev_Hash = prev_hash
 			params.Difficultyuint64 = diff.Uint64()
 			params.Difficulty = diff.String()
+			params.Hansen33Mod = true
 
 			mbl := mbl_main
 
@@ -397,7 +460,11 @@ func SendJob() {
 			params.Blockhashing_blob = fmt.Sprintf("%x", mbl.Serialize())
 			params.Blocks = v.blocks
 			params.MiniBlocks = v.miniblocks
+			if v.hashrate < 1 { // if not a hansen mod miner, then deduct orphan from mined blocks
+				params.MiniBlocks = v.miniblocks - v.orphans
+			}
 			params.Rejected = v.rejected
+			params.Orphans = v.orphans
 
 			encoder.Encode(params)
 			k.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
@@ -407,13 +474,10 @@ func SendJob() {
 		}(rk, rv)
 
 	}
-	go UpdateMinerStats()
-
 }
 
 func newUpgrader() *websocket.Upgrader {
 	u := websocket.NewUpgrader()
-	go UpdateMinerStats()
 
 	u.OnMessage(func(c *websocket.Conn, messageType websocket.MessageType, data []byte) {
 		// echo
@@ -429,10 +493,20 @@ func newUpgrader() *websocket.Upgrader {
 		client_list_mutex.Lock()
 		defer client_list_mutex.Unlock()
 
+		var x rpc.MinerInfo_Params
+		if json.Unmarshal(data, &x); len(x.Wallet_Address) > 0 {
+			// Update miners information
+			//logger.V(2).Info(fmt.Sprintf("IP: %-22s Speed: %-14f Tag: %-22s Address: %s", c.RemoteAddr().String(), x.Miner_Hashrate, x.Miner_Tag, x.Wallet_Address))
+			sess.hashrate = x.Miner_Hashrate
+			sess.tag = x.Miner_Tag
+			return
+		}
+
 		var p rpc.SubmitBlock_Params
 
 		if err := json.Unmarshal(data, &p); err != nil {
-
+			// don't think this ever happens
+			logger.Info(fmt.Sprintf("Error: %s", err.Error()))
 		}
 
 		mbl_block_data_bytes, err := hex.DecodeString(p.MiniBlockhashing_blob)
@@ -485,6 +559,10 @@ func newUpgrader() *websocket.Upgrader {
 			sess.rejected++
 			atomic.AddInt64(&CountMinisRejected, 1)
 
+			if err != nil {
+				sess.lasterr = err.Error()
+			}
+
 			rate_lock.Lock()
 			defer rate_lock.Unlock()
 
@@ -494,14 +572,27 @@ func newUpgrader() *websocket.Upgrader {
 			if i.fail_count >= 3 {
 				i.timestamp = time.Now()
 				c.Close()
+
+				miner_stats_mutex.Lock()
+
+				x := miner_stats[c.RemoteAddr().String()]
+
+				x.blocks = sess.blocks
+				x.miniblocks = sess.miniblocks
+				x.rejected = sess.rejected
+				x.tag = sess.tag
+				x.hashrate = sess.hashrate
+				x.lasterr = sess.lasterr
+
+				miner_stats[c.RemoteAddr().String()] = x
+
+				miner_stats_mutex.Unlock()
+
 				delete(client_list, c)
-				logger_getwork.Info("Banned miner", "Address", miner, "Info", "Banned")
+				logger_getwork.V(1).Info("Banned miner", "Address", miner, "Info", "Banned")
 			}
 			ban_list[miner] = i
 		}
-
-		go UpdateMinerStats()
-
 	})
 	u.OnClose(func(c *websocket.Conn, err error) {
 		client_list_mutex.Lock()
@@ -644,6 +735,9 @@ func Getwork_server() {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
+
+	logger.Info("Waiting 5 second to start getwork")
+	time.Sleep(5 * time.Second)
 
 	if err = svr.Start(); err != nil {
 		logger_getwork.Error(err, "nbio.Start failed.")

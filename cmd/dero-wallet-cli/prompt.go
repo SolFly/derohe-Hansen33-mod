@@ -16,27 +16,27 @@
 
 package main
 
-import "os"
-import "io"
-import "fmt"
-import "bytes"
-import "time"
+import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/chzyer/readline"
+	"github.com/deroproject/derohe/config"
+	"github.com/deroproject/derohe/cryptography/crypto"
+	"github.com/deroproject/derohe/globals"
+	"github.com/deroproject/derohe/rpc"
+	"github.com/deroproject/derohe/walletapi"
+)
 
 //import "io/ioutil"
 //import "path/filepath"
-import "strings"
-import "unicode"
-import "strconv"
-import "encoding/hex"
-
-import "github.com/chzyer/readline"
-
-import "github.com/deroproject/derohe/rpc"
-import "github.com/deroproject/derohe/config"
-import "github.com/deroproject/derohe/globals"
-import "github.com/deroproject/derohe/walletapi"
-
-import "github.com/deroproject/derohe/cryptography/crypto"
 
 var account walletapi.Account
 
@@ -705,11 +705,12 @@ func ConfirmYesNoDefaultYes(l *readline.Instance, prompt_temporary string) bool 
 	line, err := l.Readline()
 	if err == readline.ErrInterrupt {
 		if len(line) == 0 {
-			logger.Info("Ctrl-C received, Exiting")
-			os.Exit(0)
+			logger.Info("Ctrl-C received, to exit type - exit")
+			// os.Exit(0)
 		}
 	} else if err == io.EOF {
-		os.Exit(0)
+		logger.Info("Ctrl-d received, to exit type - exit")
+		// os.Exit(0)
 	}
 	l.SetPrompt(prompt)
 	l.Refresh()

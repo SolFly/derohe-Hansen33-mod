@@ -19,8 +19,12 @@ package p2p
 //import "net"
 //import "sync"
 //import "time"
-import "crypto/rand"
-import "encoding/binary"
+import (
+	"crypto/rand"
+	"encoding/binary"
+
+	"github.com/deroproject/derohe/config"
+)
 
 //import "path/filepath"
 //import "container/list"
@@ -48,4 +52,13 @@ func GetPeerID() uint64 {
 		peerid = binary.LittleEndian.Uint64(buf[:])
 	}
 	return peerid
+}
+
+func SetNodeTag(new_tag string) {
+	node_tag = new_tag
+	config.RunningConfig.NodeTag = node_tag
+}
+
+func GetNodeTag() string {
+	return node_tag
 }

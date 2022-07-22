@@ -40,7 +40,7 @@ func IsTrustedIP(Addr string) bool {
 
 // loads peers list from disk
 func load_trust_list() {
-	defer clean_up()
+
 	peer_mutex.Lock()
 	defer peer_mutex.Unlock()
 
@@ -71,7 +71,6 @@ func load_trust_list() {
 //save peer list to disk
 func save_trust_list() {
 
-	clean_up()
 	peer_mutex.Lock()
 	defer peer_mutex.Unlock()
 

@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,7 @@ func clean_up() {
 	defer peer_mutex.Unlock()
 	for k, v := range peer_map {
 		if IsAddressConnected(ParseIPNoError(v.Address)) {
+			v.FailCount = 0
 			continue
 		}
 		if v.FailCount >= 8 { // roughly 8 tries before we discard the peer
@@ -226,13 +228,19 @@ func Peer_Add(p *Peer) {
 }
 
 func SetLogger(newlogger *logr.Logger) {
+
+	peer_mutex.Lock()
+	defer peer_mutex.Unlock()
+
 	connection_map.Range(func(k, value interface{}) bool {
 		c := value.(*Connection)
-		c.logger = logger
+
+		logger = *newlogger
+		c.logger = logger.WithName("incoming").WithName(c.Addr.String())
+
 		return true
 	})
 
-	logger = *newlogger
 }
 
 func PrintBlockErrors() {
@@ -325,6 +333,73 @@ func PrintPeerErrors(Address string) {
 
 }
 
+func Show_Selfish_Peers() {
+
+	fmt.Printf("\nSelfish Peers - Errors Log\n")
+
+	Selfish_mutex.Lock()
+	defer Selfish_mutex.Unlock()
+
+	fmt.Printf("%-32s %-22s %-14s %-14s %-14s\n", "Address", "BTS - A/R", "Collision Rate", "Tip Fail Rate", "Total Acceptance Rate")
+
+	for Address, Logs := range SelfishNodeStats {
+
+		is_tip_issue := regexp.MustCompile("^tip could not be expanded")
+		is_collision := regexp.MustCompile("^collision ")
+
+		CollisionRate := float64(0)
+		TIPFailRate := float64(0)
+
+		Collisions := 0
+		TIPFailCount := 0
+
+		for _, log := range Logs {
+			if is_collision.Match([]byte(log.Error_Message)) {
+				Collisions++
+			}
+			if is_tip_issue.Match([]byte(log.Error_Message)) {
+				TIPFailCount++
+			}
+		}
+
+		TARate := float64(0)
+		TotalAcceptance := float64(Collisions + TIPFailCount)
+		if globals.BlocksMined >= 1 {
+			if Collisions >= 1 {
+				CollisionRate = float64((float64(Collisions) / float64(globals.BlocksMined)) * 100)
+			}
+
+			if TIPFailCount >= 1 {
+				TIPFailRate = float64((float64(TIPFailCount) / float64(globals.BlocksMined)) * 100)
+			}
+
+			if TotalAcceptance >= 1 {
+				TARate = float64((TotalAcceptance / float64(globals.BlocksMined)) * 100)
+			}
+
+		}
+
+		CollisionText := fmt.Sprintf("%d (%.2f%%)", Collisions, CollisionRate)
+		TIPText := fmt.Sprintf("%d (%.2f%%)", TIPFailCount, TIPFailRate)
+
+		AcceptedCount, RejectedCount, _, SuccessRate := GetPeerBTS(Address)
+		BTS := fmt.Sprintf("%.2f%% - %d/%d", SuccessRate, AcceptedCount, RejectedCount)
+
+		for _, error := range Logs {
+
+			if is_collision.Match([]byte(error.Error_Message)) || is_tip_issue.Match([]byte(error.Error_Message)) {
+				continue
+			}
+			fmt.Printf("\t%-32s %-32s %-32s\n", error.Block_Type, error.When.Format(time.RFC1123), error.Error_Message)
+		}
+
+		ta_out := fmt.Sprintf("%.2f%%", TARate)
+		fmt.Printf("%-32s %-22s %-14s %-14s %-14s\n", Address, BTS, CollisionText, TIPText, ta_out)
+
+	}
+
+}
+
 func Print_Peer_Info(Address string) {
 
 	peer_mutex.Lock()
@@ -339,8 +414,7 @@ func Print_Peer_Info(Address string) {
 
 	fmt.Printf("Peer Information Dashboard\n")
 
-	fmt.Printf("\nConnections:\n\n")
-	fmt.Printf("%-22s %-23s %-8s %-22s %-12s %-8s %-14s\n", "Peer ID", "Version", "Height", "Connected", "Direction", "Latency", "Tag")
+	fmt.Printf("%-22s %-23s %-8s %-22s %-12s %-12s %-8s %-14s\n", "Peer ID", "Version", "Height", "Connected", "Port", "Direction", "Latency", "Tag")
 	for _, c := range UniqueConnections() {
 		if ParseIPNoError(c.Addr.String()) == Address {
 
@@ -366,7 +440,7 @@ func Print_Peer_Info(Address string) {
 				version = version[:20]
 			}
 
-			fmt.Printf("%-22d %-23s %-8d %-22s %-12s %-8s %-14s\n", c.Peer_ID, version, c.Height, is_connected,
+			fmt.Printf("%-22d %-23s %-8d %-22s %-12d %-12s %-8s %-14s\n", c.Peer_ID, version, c.Height, is_connected, c.Port,
 				direction, time.Duration(atomic.LoadInt64(&c.Latency)).Round(time.Millisecond).String(), c.Tag)
 
 		}
@@ -374,6 +448,7 @@ func Print_Peer_Info(Address string) {
 	fmt.Printf("\n")
 
 	AcceptedCount, RejectedCount, _, SuccessRate := GetPeerBTS(Address)
+	fmt.Printf("Block Transmission Success Rate: %d Accepted / %d Rejected - %.2f%%\n\n", AcceptedCount, RejectedCount, SuccessRate)
 
 	Stats_mutex.Lock()
 	defer Stats_mutex.Unlock()
@@ -392,7 +467,6 @@ func Print_Peer_Info(Address string) {
 	fmt.Printf("Error Log:\n\t%-20s %-8d Last Error: %s\n\t%-20s %-8dLast Error: %s\n", "Sending Error(s)", len(peer.Sending_Errors), latest_sent_error.Format(time.RFC1123), "Receiving Error(s)", len(peer.Receiving_Errors), latest_recv_error.Format(time.RFC1123))
 
 	fmt.Printf("\nLogged %d error(s) - IN (%d) - OUT (%d)\n", (len(peer.Sending_Errors) + len(peer.Receiving_Errors)), len(peer.Receiving_Errors), len(peer.Sending_Errors))
-	fmt.Printf("Block Transmission Success Rate: %d Accepted / %d Rejected - %.2f%%\n\n", AcceptedCount, RejectedCount, SuccessRate)
 
 }
 
@@ -406,6 +480,24 @@ func Peer_Whitelist_Counts() (Count uint64) {
 		}
 	}
 	return uint64(count)
+}
+
+func DisconnectAddress(address string) {
+	p := GetPeerInList(ParseIPNoError(address))
+	if p == nil {
+		return
+	}
+
+	logger.Info(fmt.Sprintf("Disconnecting Peer: %s", address))
+	for _, conn := range UniqueConnections() {
+		if ParseIPNoError(conn.Addr.String()) == ParseIPNoError(address) {
+			logger.V(1).Info(fmt.Sprintf("Disconnecting: %s", conn.Addr.String()))
+			go Connection_Delete(conn)
+		}
+	}
+
+	go Peer_Delete(p)
+
 }
 
 // a peer marked as fail, will only be connected  based on exponential back-off based on powers of 2
@@ -476,7 +568,7 @@ func PeerList_Print(limit int64) {
 	defer peer_mutex.Unlock()
 	fmt.Printf("Peer List\n")
 	// fmt.Printf("%-20s %-22s %-23s %-8s %-22s %-12s %-10s %-8s %-8s %-8s %-8s %-14s\n", "Remote Addr", "Peer ID", "Version", "Height", "Connected", "Direction", "Latency", "IN", "OUT", "Good", "Fail", "Tag")
-	fmt.Printf("%-20s %-22s %-23s %-8s %-22s %-12s %-10s %-8s %-22s %-14s\n", "Remote Addr", "Peer ID", "Version", "Height", "Connected", "Direction", "Latency", "Good", "Block Success Rate", "Tag")
+	fmt.Printf("%-20s %-12s %-22s %-23s %-8s %-22s %-12s %-10s %-8s %-22s %-14s\n", "Remote Addr", "Port", "Peer ID", "Version", "Height", "Connected", "Direction", "Latency", "Good", "Block Success Rate", "Tag")
 
 	active_peers := 0
 	pending_peers := 0
@@ -547,7 +639,7 @@ func PeerList_Print(limit int64) {
 			// direction, time.Duration(atomic.LoadInt64(&c.Latency)).Round(time.Millisecond).String(), humanize.Bytes(atomic.LoadUint64(&c.BytesIn)),
 			// humanize.Bytes(atomic.LoadUint64(&c.BytesOut)), peer.GoodCount, peer.FailCount, c.Tag)
 
-			fmt.Printf("%-20s %-22d %-23s %-8d %-22s %-12s %-10s %-8d %-22.2f %-14s\n", ParseIPNoError(peer.Address), c.Peer_ID, version, c.Height, is_connected,
+			fmt.Printf("%-20s %-12d %-22d %-23s %-8d %-22s %-12s %-10s %-8d %-22.2f %-14s\n", ParseIPNoError(peer.Address), c.Port, c.Peer_ID, version, c.Height, is_connected,
 				direction, time.Duration(atomic.LoadInt64(&c.Latency)).Round(time.Millisecond).String(), peer.GoodCount,
 				success_rate, c.Tag)
 
@@ -589,9 +681,7 @@ func find_peer_to_connect(version int) *Peer {
 	}
 	// if we donot have any white listed, choose from the greylist
 	for _, v := range peer_map {
-		if uint64(time.Now().Unix()) > v.BlacklistBefore && //  if ip is blacklisted skip it
-			uint64(time.Now().Unix()) > v.ConnectAfter &&
-			!IsAddressConnected(ParseIPNoError(v.Address)) && !v.Whitelist && !IsAddressInBanList(ParseIPNoError(v.Address)) {
+		if !IsAddressConnected(ParseIPNoError(v.Address)) && !IsAddressInBanList(ParseIPNoError(v.Address)) && uint64(time.Now().Unix()) > v.ConnectAfter {
 			v.ConnectAfter = uint64(time.Now().UTC().Unix()) + 10 // minimum 10 secs gap
 			return v
 		}

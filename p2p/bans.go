@@ -330,12 +330,17 @@ func UnBan_Address(address string) (err error) {
 	}
 	ban_mutex.Lock()
 	defer ban_mutex.Unlock()
+
 	logger.Info("unbanned", "address", address)
-	delete(ban_map, address)
+
+	_, bm := ban_map[address]
+	if bm {
+		delete(ban_map, address)
+	}
 
 	// remove from autoban
-	_, ab := permban_map[address]
-	if ab {
+	_, pb := permban_map[address]
+	if pb {
 		delete(permban_map, address)
 	}
 

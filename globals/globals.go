@@ -27,6 +27,7 @@ import (
 
 	"path/filepath"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ import (
 var Subsystem_Active uint32 // atomic counter to show how many subsystems are active
 var Exit_In_Progress bool
 var StartTime = time.Now()
+var BlockChainStartHeight int64
 
 // on init this variable is updated to setup global config in 1 go
 var Config config.CHAIN_CONFIG = config.Mainnet // default is mainnnet
@@ -67,6 +69,29 @@ var NextDiagnocticCheck int64 = time.Now().Unix() + 15
 var BlockPopCount int64
 
 var SeedHeight int64 = 0
+
+var BlocksMined int64
+
+var threadProfile = pprof.Lookup("threadcreate")
+var mutexProfile = pprof.Lookup("mutex")
+var blockingProfile = pprof.Lookup("block")
+var goProfile = pprof.Lookup("goroutine")
+
+func CountThreads() int {
+	return threadProfile.Count()
+}
+
+func CountMutex() int {
+	return mutexProfile.Count()
+}
+
+func CountBlocked() int {
+	return blockingProfile.Count()
+}
+
+func CountGoProcs() int {
+	return goProfile.Count()
+}
 
 // get current time with clock offset applied
 func Time() time.Time {
